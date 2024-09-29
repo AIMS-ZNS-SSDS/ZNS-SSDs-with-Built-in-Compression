@@ -104,7 +104,7 @@ struct zns_plane{
     uint64_t next_plane_avail_time;
 };
 
-struct zns_fc {
+struct zns_fc { //flash chip
     struct zns_plane *plane;
     uint64_t next_fc_avail_time;
 };
@@ -231,16 +231,16 @@ typedef enum NvmeZoneState {
 #define NVME_SET_CSI(vec, csi) (vec |= (uint8_t)(1 << (csi)))
 
 typedef struct QEMU_PACKED NvmeLBAFE {
-    uint64_t    zsze;
-    uint8_t     zdes;
+    uint64_t    zsze; //zone size
+    uint8_t     zdes; //zone extension size
     uint8_t     rsvd9[7];
 } NvmeLBAFE;
 
 typedef struct QEMU_PACKED NvmeIdNsZoned {
     uint16_t    zoc;
     uint16_t    ozcs;
-    uint32_t    mar;
-    uint32_t    mor;
+    uint32_t    mar; //max active resources
+    uint32_t    mor; //max open resources
     uint32_t    rrl;
     uint32_t    frl;
     uint8_t     rsvd20[2796];
@@ -300,7 +300,7 @@ static inline uint64_t zns_ns_nlbas(NvmeNamespace *ns)
 /* convert an LBA to the equivalent in bytes */
 static inline size_t zns_l2b(NvmeNamespace *ns, uint64_t lba)
 {
-    return lba << zns_ns_lbads(ns);
+    return lba << zns_ns_lbads(ns); //地址转换为字节，比如LBA 0的起始byte 0， LBA 1的起始byte 4096
 }
 
 static inline NvmeZoneState zns_get_zone_state(NvmeZone *zone)

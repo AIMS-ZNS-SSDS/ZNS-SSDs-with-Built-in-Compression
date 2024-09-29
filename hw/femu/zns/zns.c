@@ -1,5 +1,7 @@
 #include "./zns.h"
-
+#include "qat-dc.h"
+#include <stdlib.h>
+#include <stdint.h>
 #define MIN_DISCARD_GRANULARITY     (4 * KiB)
 #define NVME_DEFAULT_ZONE_SIZE      (128 * MiB)
 #define NVME_DEFAULT_MAX_AZ_SIZE    (128 * KiB)
@@ -283,6 +285,22 @@ static int zns_aor_check(NvmeNamespace *ns, uint32_t act, uint32_t opn)
 
     return NVME_SUCCESS;
 }
+
+/*added by zwl, zns oob area*/
+
+/*Write a single out-of-bound (OOB) area entry*/
+// static int zns_write_oob_meta(FemuCtrl *n, uint64_t lba, void *meta)
+// {
+//     zns_;
+//     uint64_t sec_idx = ppa2secidx(n, ppa);
+//     uint64_t oft = sec_idx * n->meta_len + n->int_meta_size;
+//     uint8_t *tgt_sos_meta_buf = &n->meta_buf[oft];
+
+//     assert(oft + n->zns_params.sos < n->meta_tbytes);
+//     memcpy(tgt_sos_meta_buf, meta, n->zns_params.sos);
+
+//     return 0;
+// }
 
 static uint16_t zns_check_zone_state_for_write(NvmeZone *zone)
 {
@@ -834,6 +852,7 @@ static uint16_t zns_map_dptr(FemuCtrl *n, size_t len, NvmeRequest *req)
 static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
                            NvmeRequest *req,bool append)
 {
+    // printf("zns_nvme_rw\n");
     NvmeRwCmd *rw = (NvmeRwCmd *)&req->cmd; 
     uint64_t slba = le64_to_cpu(rw->slba);
     uint32_t nlb = (uint32_t)le16_to_cpu(rw->nlb) + 1;
@@ -844,8 +863,9 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
     NvmeZone *zone;
     NvmeZonedResult *res = (NvmeZonedResult *)&req->cqe;
     assert(n->zoned);
-    req->is_write = (rw->opcode == NVME_CMD_WRITE) ? 1 : 0;
-
+    req->is_write = ((rw->opcode == NVME_CMD_WRITE) || (rw->opcode == NVME_CMD_ZONE_APPEND)) ? 1 : 0;
+    // printf("zns_nvme_rw is_write %d\n",req->is_write);
+    // printf("nvme command:%u\n",rw->opcode);
     status = nvme_check_mdts(n, data_size);
     if (status) {
         goto err;
@@ -858,6 +878,7 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
 
     if(req->is_write)
     {
+        // printf("zns_nvme_rw write\n");
         zone = zns_get_zone_by_slba(ns, slba);
         status = zns_check_zone_write(n, ns, zone, slba, nlb, append);
         if (status) {
@@ -873,6 +894,8 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
              }
              slba = zone->w_ptr;
         }
+
+        
         res->slba = zns_advance_zone_wp(ns, zone, nlb);
     }
     else
@@ -903,7 +926,104 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
     req->status = NVME_SUCCESS;
     req->nlb = nlb;
 
-    backend_rw(n->mbe, &req->qsg, &data_offset, req->is_write);
+    // if(req->is_write){
+    //     //added by zwl, qat compress test
+    //     printf("qat compress test\n");
+    //     qat_init(n);
+    //     int sg_cur_index = 0;
+    //     dma_addr_t sg_cur_byte = 0;
+    //     dma_addr_t cur_len;
+    //     uint64_t mb_oft = (&data_offset)[0];
+    //     void *mb = n->mbe->logical_space;
+    //     while (sg_cur_index < (&req->qsg)->nsg){
+    //         //cur_addr = qsg->sg[sg_cur_index].base + sg_cur_byte;
+    //         cur_len = (&req->qsg)->sg[sg_cur_index].len - sg_cur_byte;
+    //         uint32_t outputlen = 0;
+    //         qat_dc_compress(n,0,mb+mb_oft,cur_len,&outputlen,1);
+    //         fprintf(stdout,"compress %lu bytes to %u bytes\n",cur_len,outputlen);
+    //         sg_cur_byte += cur_len;
+    //         if (sg_cur_byte == (&req->qsg)->sg[sg_cur_index].len) {
+    //             sg_cur_byte = 0;
+    //             ++sg_cur_index;
+    //         }
+    //         mb_oft += cur_len;
+    //     }
+        
+    //     qat_exit(n);
+    // }
+
+    // backend_rw(n->mbe, &req->qsg, &data_offset, req->is_write);
+    if(rw->opcode == NVME_CMD_WRITE){
+        printf("nvme write\n");
+    }
+    else if(rw->opcode == NVME_CMD_ZONE_APPEND){
+        printf("nvme zone append\n");
+    }
+
+    if((req->is_write)){
+        //added by wpy
+        printf("qat compress test\n");
+        qat_init(n);
+        int sg_cur_index = 0;
+        dma_addr_t sg_cur_byte = 0;
+        dma_addr_t cur_len;
+        uint64_t mb_oft = (&data_offset)[0];
+        void *mb = n->mbe->logical_space;
+        uint32_t outputlen = 0;
+
+        // CpaDcDpOpData **opData = n->dc_op_datas;
+        while (sg_cur_index < (&req->qsg)->nsg){
+            //cur_addr = qsg->sg[sg_cur_index].base + sg_cur_byte;
+            cur_len = (&req->qsg)->sg[sg_cur_index].len - sg_cur_byte;
+            
+            qat_dc_compress(n,0,mb+mb_oft,cur_len,&outputlen,1);
+            fprintf(stdout,"compress %lu bytes to %u bytes\n",cur_len,outputlen);
+
+            
+            // if (n->dc_op_datas == NULL) {
+            // printf("Invalid operation data structure.\n");
+            // return;
+            // }
+            printf("Compression Info:\n");
+            // 源缓冲区的物理地址和长度
+            printf("Source buffer physical address: 0x%lx\n", (unsigned long)n->dc_op_datas[0]->srcBuffer);
+            printf("Source buffer length: %u bytes\n", n->dc_op_datas[0]->srcBufferLen);
+
+            // 目标缓冲区的物理地址和长度
+            printf("Destination buffer physical address: 0x%lx\n",(unsigned long) n->dc_op_datas[0]->destBuffer);
+            printf("Destination buffer length: %u bytes\n", n->dc_op_datas[0]->destBufferLen);
+            
+
+            // void *dest_buffer = (void *)(uintptr_t)n->dc_op_datas[0]->destBuffer; // 将物理地址转换为指针
+            // printf("destbuffer content: %.*s\n", outputlen, (char *)dest_buffer); // 输出字符串内容
+
+            sg_cur_byte += cur_len;
+            if (sg_cur_byte == (&req->qsg)->sg[sg_cur_index].len) {
+                sg_cur_byte = 0;
+                ++sg_cur_index;
+            }
+            mb_oft += cur_len;
+        }
+        
+        qat_exit(n);
+        // update compressed data to req->qsg
+        
+        printf("qsg->base: 0x%lx\n",(&req->qsg)->sg[0].base);
+        // printf("qsg->base content: %s\n",(&req->qsg)->sg[0].base);
+        printf("qsg->len: %lu\n",(&req->qsg)->sg[0].len);
+        printf("qsg->size: %lu\n",(&req->qsg)->size);
+        (&req->qsg)->sg[0].base = n->dc_op_datas[0]->destBuffer;
+        (&req->qsg)->sg[0].len = outputlen;
+        (&req->qsg)->size = outputlen;
+        // printf("destbuffer content: %s\n",n->dc_dst_buffer[0]);
+
+        backend_rw(n->mbe, &req->qsg, &data_offset, req->is_write);
+    }
+    else{
+        backend_rw(n->mbe, &req->qsg, &data_offset, req->is_write);
+    }
+    
+
 
     if(req->is_write)
     {

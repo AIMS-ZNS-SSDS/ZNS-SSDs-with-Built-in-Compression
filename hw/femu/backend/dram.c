@@ -44,6 +44,8 @@ int backend_rw(SsdDramBackend *b, QEMUSGList *qsg, uint64_t *lbal, bool is_write
         cur_addr = qsg->sg[sg_cur_index].base + sg_cur_byte;
         cur_len = qsg->sg[sg_cur_index].len - sg_cur_byte;
         if (dma_memory_rw(qsg->as, cur_addr, mb + mb_oft, cur_len, dir, MEMTXATTRS_UNSPECIFIED)) {
+            // printf("cur_addr: %lx, mb: %lx, cur_len: %lx, dir: %d\n", cur_addr, mb + mb_oft, cur_len, dir);
+            printf("dma_memory_rw error\n");
             femu_err("dma_memory_rw error\n");
         }
 
@@ -52,6 +54,9 @@ int backend_rw(SsdDramBackend *b, QEMUSGList *qsg, uint64_t *lbal, bool is_write
             sg_cur_byte = 0;
             ++sg_cur_index;
         }
+        
+        if(is_write){
+        printf("now we are in backend_rw\n");}
 
         if (b->femu_mode == FEMU_OCSSD_MODE) {
             mb_oft = lbal[sg_cur_index];

@@ -17,6 +17,9 @@
 #include "inc/pqueue.h"
 #include "nand/nand.h"
 #include "timing-model/timing.h"
+#include "hw/femu/zns/qat/cpa.h"
+#include "hw/femu/zns/qat/cpa_dc_dp.h"
+#include "hw/femu/zns/qat/cpa_dc.h"
 
 #define NVME_ID_NS_LBADS(ns)                                                  \
     ((ns)->id_ns.lbaf[NVME_ID_NS_FLBAS_INDEX((ns)->id_ns.flbas)].lbads)
@@ -850,7 +853,7 @@ typedef struct NvmeRangeType {
 
 typedef struct NvmeLBAF {
     uint16_t    ms;
-    uint8_t     lbads;
+    uint8_t     lbads; //data size, size of one logical page in bytes
     uint8_t     rp;
 } NvmeLBAF;
 
@@ -1170,6 +1173,8 @@ typedef struct ZNSCtrlParams {
     uint8_t  zns_num_lun;
     uint8_t  zns_num_plane;
     uint8_t  zns_num_blk;
+    /*added by zwl oob size*/
+    uint16_t sos;
     int zns_flash_type;
 } ZNSCtrlParams;
 
@@ -1201,6 +1206,16 @@ typedef struct FemuCtrl {
     MemoryRegion    iomem;
     MemoryRegion    ctrl_mem;
     NvmeBar         bar;
+
+    //added by zwl qat
+    CpaInstanceHandle *dc_inst_handles;
+    CpaDcSessionHandle *dc_session_handles;
+    Cpa16U dc_inst_num;
+    uint8_t **dc_src_buffers;
+    uint8_t **dc_dst_buffers;
+    bool qat_init_flag;
+    CpaDcDpOpData **dc_op_datas;
+    uint32_t *dc_inflight_ops;
 
     /* Coperd: ZNS FIXME */
     QemuUUID        uuid;
