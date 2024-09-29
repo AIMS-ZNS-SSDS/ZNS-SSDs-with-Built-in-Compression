@@ -1,0 +1,5 @@
+femu-scripts/qemu-system-x86_64 filter=lfs diff=lfs merge=lfs -text
+cscope.po.out filter=lfs diff=lfs merge=lfs -text
+femu-scripts/pc-bios/edk2-aarch64-code.fd filter=lfs diff=lfs merge=lfs -text
+femu-scripts/pc-bios/edk2-arm-code.fd filter=lfs diff=lfs merge=lfs -text
+femu-scripts/pc-bios/edk2-arm-vars.fd filter=lfs diff=lfs merge=lfs -text
