@@ -12,7 +12,7 @@
 #include "zftl.h"
 
 #define LOGICAL_PAGE_SIZE (4*KiB)
-#define ZNS_PAGE_SIZE (16*KiB)
+#define ZNS_PAGE_SIZE (4*KiB)
 #define ZNS_DEFAULT_NUM_WRITE_CACHE (3)
 #define ZNS_DEFAULT_L2P_CACHE_SIZE (1*MiB)
 
@@ -67,13 +67,13 @@ typedef struct NvmeIdCtrlZoned {
 struct ppa {
     union {
         struct {
-        uint64_t spg  : SPG_BITS;
+        uint64_t spg  : SPG_BITS; //sub page
         uint64_t pg   : PG_BITS;
 	    uint64_t blk  : BLK_BITS;
 	    uint64_t fc   : FC_BITS;
         uint64_t pl   : PL_BITS;
 	    uint64_t ch   : CH_BITS;
-        uint64_t V    : 1;
+        uint64_t V    : 1; //padding page or not
         uint64_t rsv  : 8;
         } g;
 
@@ -104,7 +104,7 @@ struct zns_plane{
     uint64_t next_plane_avail_time;
 };
 
-struct zns_fc {
+struct zns_fc { //flash chip
     struct zns_plane *plane;
     uint64_t next_fc_avail_time;
 };
@@ -121,11 +121,25 @@ typedef struct SSDNandFlashTiming {
     uint64_t blk_er_lat[MAX_FLASH_TYPE]; /* NAND block erase latency in nanoseconds */
 } SSDNandFlashTiming;
 
+//added by zwl oob
+//profiling physical pages metadata of compress
+#ifdef COMP_META
+struct lpn_with_comp_meta {
+    uint64_t lpn;
+    uint32_t compressed_size;
+};
+#endif
+
 struct zns_write_cache{
     uint64_t sblk; //idx of corresponding superblock
     uint64_t used; 
     uint64_t cap;
+#ifdef COMP_META
+    struct lpn_with_comp_meta* lpns; //identify the cached data
+    //bool previous_residue;
+#else
     uint64_t* lpns; //identify the cached data
+#endif
 };
 
 struct zns_sram{
@@ -161,6 +175,15 @@ struct zns_ssd {
 
     uint32_t lbasz;
     uint32_t active_zone;
+
+    //allow error in learned index
+    uint8_t N; // N >= 0
+    //added by zwl oob
+    uint8_t int_meta_size;
+    uint16_t sos;
+    int meta_len; //oob data length for one page
+    int meta_total_bytes;
+    uint8_t *meta_buf;
 };
 
 enum NvmeZoneAttr {
@@ -231,16 +254,16 @@ typedef enum NvmeZoneState {
 #define NVME_SET_CSI(vec, csi) (vec |= (uint8_t)(1 << (csi)))
 
 typedef struct QEMU_PACKED NvmeLBAFE {
-    uint64_t    zsze;
-    uint8_t     zdes;
+    uint64_t    zsze; //zone size
+    uint8_t     zdes; //zone descriptor extension size
     uint8_t     rsvd9[7];
 } NvmeLBAFE;
 
 typedef struct QEMU_PACKED NvmeIdNsZoned {
     uint16_t    zoc;
     uint16_t    ozcs;
-    uint32_t    mar;
-    uint32_t    mor;
+    uint32_t    mar; //max active resources
+    uint32_t    mor; //max open resources
     uint32_t    rrl;
     uint32_t    frl;
     uint8_t     rsvd20[2796];
@@ -300,7 +323,7 @@ static inline uint64_t zns_ns_nlbas(NvmeNamespace *ns)
 /* convert an LBA to the equivalent in bytes */
 static inline size_t zns_l2b(NvmeNamespace *ns, uint64_t lba)
 {
-    return lba << zns_ns_lbads(ns);
+    return lba << zns_ns_lbads(ns); //地址转换为字节，比如LBA 0的起始byte 0， LBA 1的起始byte 4096
 }
 
 static inline NvmeZoneState zns_get_zone_state(NvmeZone *zone)

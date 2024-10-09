@@ -64,6 +64,7 @@ int backend_rw(SsdDramBackend *b, QEMUSGList *qsg, uint64_t *lbal, bool is_write
         }
     }
 
+    printf("mb_oft:%lu\n",mb_oft);
     qemu_sglist_destroy(qsg);
 
     return 0;

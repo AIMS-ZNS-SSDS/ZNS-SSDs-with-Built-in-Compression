@@ -17,6 +17,10 @@
 #include "inc/pqueue.h"
 #include "nand/nand.h"
 #include "timing-model/timing.h"
+#include "hw/femu/zns/qat/cpa.h"
+#include "hw/femu/zns/qat/cpa_dc_dp.h"
+#include "hw/femu/zns/qat/cpa_dc.h"
+#include "hw/femu/zns/mode-selection.h"
 
 #define NVME_ID_NS_LBADS(ns)                                                  \
     ((ns)->id_ns.lbaf[NVME_ID_NS_FLBAS_INDEX((ns)->id_ns.flbas)].lbads)
@@ -850,7 +854,7 @@ typedef struct NvmeRangeType {
 
 typedef struct NvmeLBAF {
     uint16_t    ms;
-    uint8_t     lbads;
+    uint8_t     lbads; //data size, size of one logical page in bytes
     uint8_t     rp;
 } NvmeLBAF;
 
@@ -985,6 +989,9 @@ typedef struct NvmeRequest {
     int64_t                 gcrt;
     int64_t                 expire_time;
 
+    #ifdef COMPRESS
+    uint32_t *compressed_size;
+    #endif
     /* OC2.0: sector offset relative to slba where reads become invalid */
     uint64_t predef;
 
@@ -1170,6 +1177,8 @@ typedef struct ZNSCtrlParams {
     uint8_t  zns_num_lun;
     uint8_t  zns_num_plane;
     uint8_t  zns_num_blk;
+    /*added by zwl oob size*/
+    uint16_t sos;
     int zns_flash_type;
 } ZNSCtrlParams;
 
@@ -1202,17 +1211,27 @@ typedef struct FemuCtrl {
     MemoryRegion    ctrl_mem;
     NvmeBar         bar;
 
+    //added by zwl qat
+    CpaInstanceHandle *dc_inst_handles;
+    CpaDcSessionHandle *dc_session_handles;
+    Cpa16U dc_inst_num;
+    uint8_t **dc_src_buffers;
+    uint8_t **dc_dst_buffers;
+    bool qat_init_flag;
+    CpaDcDpOpData **dc_op_datas;
+    uint32_t *dc_inflight_ops;
+
     /* Coperd: ZNS FIXME */
     QemuUUID        uuid;
     uint32_t        zasl_bs;
     uint8_t         zasl;
     bool            zoned;
     bool            cross_zone_read;
-    uint64_t        zone_size_bs;
+    uint64_t        zone_size_bs; //size in bytes
     bool            zone_cap_bs;
     uint32_t        max_active_zones;
     uint32_t        max_open_zones;
-    uint32_t        zd_extension_size;
+    uint32_t        zd_extension_size; //zone descriptor extension size
 
     const uint32_t  *iocs;
     uint8_t         csi;
@@ -1223,10 +1242,10 @@ typedef struct FemuCtrl {
     QTAILQ_HEAD(, NvmeZone) closed_zones;
     QTAILQ_HEAD(, NvmeZone) full_zones;
     uint32_t        num_zones;
-    uint64_t        zone_size;
-    uint64_t        zone_capacity;
-    uint32_t        zone_size_log2;
-    uint8_t         *zd_extensions;
+    uint64_t        zone_size; //number of lba
+    uint64_t        zone_capacity;//number of lba
+    uint32_t        zone_size_log2; //bytes in log2
+    uint8_t         *zd_extensions; //descriptor extension 总大小
     int32_t         nr_open_zones;
     int32_t         nr_active_zones;
 

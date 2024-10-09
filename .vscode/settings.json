@@ -1,0 +1,20 @@
+{
+    "files.associations": {
+        "nvme.h": "c",
+        "nand.h": "c",
+        "qat-dc.h": "c",
+        "icp_sal_poll.h": "c",
+        "icp_sal_user.h": "c",
+        "cpa_sample_utils.h": "c",
+        "cpa_sample_cnv_utils.h": "c",
+        "cpa.h": "c",
+        "*.inc": "c",
+        "zns.h": "c",
+        "oc12.h": "c",
+        "zftl.h": "c",
+        "*.tmpl": "c",
+        "*.idef": "c",
+        "mode-selection.h": "c",
+        "*.code": "c"
+    }
+}

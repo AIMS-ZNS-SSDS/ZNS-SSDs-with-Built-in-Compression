@@ -3944,6 +3944,11 @@ foreach target : target_dirs
       'dependencies': []
     }]
   endif
+
+  # added by zwl qat
+  qat_deps = [cc.find_library('qat_s', dirs: '/home/zwl/femu-original/hw/femu/zns/qat/')]
+  qat_deps += cc.find_library('usdm_drv_s', dirs: '/home/zwl/femu-original/hw/femu/zns/qat/')
+
   foreach exe: execs
     exe_name = exe['name']
     if host_os == 'darwin'
@@ -3953,7 +3958,9 @@ foreach target : target_dirs
     emulator = executable(exe_name, exe['sources'],
                install: true,
                c_args: c_args,
-               dependencies: arch_deps + deps + exe['dependencies'],
+               #dependencies: arch_deps + deps + exe['dependencies'],
+               #added by zwl qat
+               dependencies: arch_deps + deps + exe['dependencies'] + qat_deps,
                objects: lib.extract_all_objects(recursive: true),
                link_depends: [block_syms, qemu_syms],
                link_args: link_args,

@@ -1,5 +1,5 @@
 #include "./zns.h"
-
+#include "qat-dc.h"
 #define MIN_DISCARD_GRANULARITY     (4 * KiB)
 #define NVME_DEFAULT_ZONE_SIZE      (128 * MiB)
 #define NVME_DEFAULT_MAX_AZ_SIZE    (128 * KiB)
@@ -830,10 +830,46 @@ static uint16_t zns_map_dptr(FemuCtrl *n, size_t len, NvmeRequest *req)
     }
 }
 
+#ifdef CHECK_READ_RIGHT
+/*interface for getting ppn from learned index, modify the paramters as you need*/
+int get_right_ppa_from_learnedindex(FemuCtrl *n, NvmeCmd *cmd, NvmeRequest *req, struct ppa &ppa){
+    uint64_t lpn = lba / (LOGICAL_PAGE_SIZE / n->zns->lbasz);
+    struct ppa ppa_from_li = get_maptbl_ent(n->zns, lpn);
+    /*replace above with real code*/
+    char *meta = malloc(n->zns->sos);
+    zns_read_oob_meta(n->zns, ppa_from_li, meta);
+    // 提取前 4 byte (uint32_t)
+    uint32_t first_4_bytes;
+    memcpy(&first_4_bytes, meta, 4);
+    if(first_4_bytes == lpn){
+        // 说明这个ppa是正确的
+        ppa = ppa_from_li;
+        return 0;
+    } else {
+        //FIXME*: only support N=1 currently
+        uint8_t reverse_mapping;
+        memcpy(&reverse_mapping, meta + 6, 1);
+        //取reverse_mapping的高N/2 byte 和 低N/2 byte
+        uint8_t high_n = (reverse_mapping >> 4) & 0x0F;
+        uint8_t low_n =  reverse_mapping & 0x0F;
+        
+        if(high_n + first_4_bytes == lpn){
+            
+            ppa = get_maptbl_ent(n->zns, );
+            return 0;
+        } else {
+            
+        }
+        
+    }
+}   
+#endif
+
 /*Misao: backend read/write without latency emulation*/
 static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
                            NvmeRequest *req,bool append)
 {
+    //printf("zns_nvme_rw\n");
     NvmeRwCmd *rw = (NvmeRwCmd *)&req->cmd; 
     uint64_t slba = le64_to_cpu(rw->slba);
     uint32_t nlb = (uint32_t)le16_to_cpu(rw->nlb) + 1;
@@ -844,8 +880,9 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
     NvmeZone *zone;
     NvmeZonedResult *res = (NvmeZonedResult *)&req->cqe;
     assert(n->zoned);
-    req->is_write = (rw->opcode == NVME_CMD_WRITE) ? 1 : 0;
-
+    req->is_write = ((rw->opcode == NVME_CMD_WRITE) || (rw->opcode == NVME_CMD_ZONE_APPEND)) ? 1 : 0;
+    //printf("zns_nvme_rw is_write %d\n",req->is_write);
+    //printf("nvme command:%u\n",rw->opcode);
     status = nvme_check_mdts(n, data_size);
     if (status) {
         goto err;
@@ -858,6 +895,7 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
 
     if(req->is_write)
     {
+        //printf("zns_nvme_rw write\n");
         zone = zns_get_zone_by_slba(ns, slba);
         status = zns_check_zone_write(n, ns, zone, slba, nlb, append);
         if (status) {
@@ -873,6 +911,8 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
              }
              slba = zone->w_ptr;
         }
+
+        
         res->slba = zns_advance_zone_wp(ns, zone, nlb);
     }
     else
@@ -903,7 +943,89 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
     req->status = NVME_SUCCESS;
     req->nlb = nlb;
 
+    // if(req->is_write){
+    //     //added by zwl, qat compress test
+    //     printf("qat compress test\n");
+    //     qat_init(n);
+    //     int sg_cur_index = 0;
+    //     dma_addr_t sg_cur_byte = 0;
+    //     dma_addr_t cur_len;
+    //     uint64_t mb_oft = (&data_offset)[0];
+    //     void *mb = n->mbe->logical_space;
+    //     while (sg_cur_index < (&req->qsg)->nsg){
+    //         //cur_addr = qsg->sg[sg_cur_index].base + sg_cur_byte;
+    //         cur_len = (&req->qsg)->sg[sg_cur_index].len - sg_cur_byte;
+    //         uint32_t outputlen = 0;
+    //         qat_dc_compress(n,0,mb+mb_oft,cur_len,&outputlen,1);
+    //         fprintf(stdout,"compress %lu bytes to %u bytes\n",cur_len,outputlen);
+    //         sg_cur_byte += cur_len;
+    //         if (sg_cur_byte == (&req->qsg)->sg[sg_cur_index].len) {
+    //             sg_cur_byte = 0;
+    //             ++sg_cur_index;
+    //         }
+    //         mb_oft += cur_len;
+    //     }
+        
+    //     qat_exit(n);
+    // }
+    
+    #ifdef COMPRESS
+    if((req->is_write)){
+        //added by wpy
+        //printf("qat compress test\n");
+        qat_init(n);
+        int sg_cur_index = 0;
+        dma_addr_t sg_cur_byte = 0;
+        dma_addr_t cur_addr, cur_len;
+
+        /*原始数据，用于压缩*/        
+        uint64_t mb_oft_2 = (&data_offset)[0];
+        void *mb_2 = n->mbe->logical_space;
+        
+        /*压缩后数据*/
+        void *mb = g_malloc(4096); //这个空间大小需要根据实际情况调整
+
+        uint32_t outputlen = 0;
+        DMADirection dir = DMA_DIRECTION_TO_DEVICE;
+
+        req->compressed_size = g_malloc(sizeof(uint32_t) * (&req->qsg)->nsg);
+        // CpaDcDpOpData **opData = n->dc_op_datas;
+        //printf("(&req->qsg)->nsg : %d\n",(&req->qsg)->nsg);
+        while (sg_cur_index < (&req->qsg)->nsg){
+            qat_dc_compress(n,0,mb_2+mb_oft_2,((&req->qsg)->sg[sg_cur_index].len - sg_cur_byte),mb, &outputlen,1);
+            printf("sg_cur_index : %d, outputlen : %d\n",sg_cur_index,outputlen);
+
+            (&req->qsg)->sg[sg_cur_index].len = outputlen;
+            (&req->qsg)->size = outputlen;
+
+            (req->compressed_size)[sg_cur_index] = outputlen;
+
+            cur_addr = (&req->qsg)->sg[sg_cur_index].base + sg_cur_byte;
+            cur_len = (&req->qsg)->sg[sg_cur_index].len - sg_cur_byte;
+
+            if (dma_memory_rw((&req->qsg)->as, cur_addr, mb, cur_len, dir, MEMTXATTRS_UNSPECIFIED)) {
+                femu_err("dma_memory_rw error\n");
+            }
+
+            sg_cur_byte += cur_len;
+            if (sg_cur_byte == (&req->qsg)->sg[sg_cur_index].len) {
+                sg_cur_byte = 0;
+                ++sg_cur_index;
+            }
+            mb_oft_2 += (&req->qsg)->sg[sg_cur_index].len; //为了这次测试方便我把大小写死了，但是需要将这个变为自适应的
+            
+            
+        }
+        
+        qat_exit(n);
+        qemu_sglist_destroy(&req->qsg);
+    }
+    else{
+        backend_rw(n->mbe, &req->qsg, &data_offset, req->is_write);
+    }
+    #else
     backend_rw(n->mbe, &req->qsg, &data_offset, req->is_write);
+    #endif
 
     if(req->is_write)
     {
@@ -1280,6 +1402,16 @@ static void zns_init_params(FemuCtrl *n)
         id_zns->cache.write_cache[i].lpns = g_malloc0(sizeof(uint64_t) * id_zns->cache.write_cache[i].cap);
     }
 
+    //added by zwl oob
+    //init oob
+    id_zns->int_meta_size = 4;
+    id_zns->sos = n->zns_params.sos;
+    id_zns->N = 1;
+    id_zns->meta_len = id_zns->int_meta_size + n->zns_params.sos;
+    id_zns->meta_total_bytes = id_zns->meta_len * id_zns->num_ch * id_zns->num_lun * id_zns->num_plane * id_zns->num_blk * id_zns->num_page;
+    femu_log("Allocating OOB: %.1f KB\n",id_zns->meta_total_bytes / 1024.0);
+    id_zns->meta_buf = g_malloc0(id_zns->meta_total_bytes);
+    printf("sos:%d metalen:%d meta_buf_size:%ld\n",id_zns->sos,id_zns->meta_len,sizeof(id_zns->meta_total_bytes));
     femu_log("===========================================\n");
     femu_log("|        ZMS HW Configuration()           |\n");      
     femu_log("===========================================\n");

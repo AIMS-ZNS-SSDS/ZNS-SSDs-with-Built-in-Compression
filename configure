@@ -238,7 +238,9 @@ for opt do
   esac
 done
 
-default_cflags='-O2 -g'
+default_cflags='-O0 -g'
+#added by zwl qat
+#default_cflags='-O2 -g -I/QAT/quickassist/include -I/QAT/quickassist/lookaside/access_layer/src/sample_code/functional/include -I/QAT/quickassist/lookaside/access_layer/include'
 git_submodules_action="update"
 docs="auto"
 EXESUF=""
