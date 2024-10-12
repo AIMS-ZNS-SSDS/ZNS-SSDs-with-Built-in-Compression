@@ -367,9 +367,9 @@ CpaStatus qat_dc_compress(FemuCtrl *n, uint32_t inst_idx, void *input, uint32_t 
         {
             // 处理压缩操作结果
             for (uint32_t i = 0; i < batch_sz; i++)
-            {
-                memcpy(output, pDstBuffers[inst_idx], *output_len);
+            { 
                 qatomic_set(output_len + i, pOpDatas[inst_idx * QAT_OP_PER_INST + i]->results.produced);
+                memcpy(output, pDstBuffers[inst_idx], *output_len);
             }
             output_len += batch_sz;
         }

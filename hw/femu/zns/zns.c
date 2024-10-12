@@ -865,6 +865,65 @@ int get_right_ppa_from_learnedindex(FemuCtrl *n, NvmeCmd *cmd, NvmeRequest *req,
 }   
 #endif
 
+#ifdef READ_1
+int read_with_ppn(FemuCtrl *n, NvmeCmd *cmd, NvmeRequest *req){
+    uint64_t lba = req->slba;
+    uint32_t nlb = req->nlb;
+    uint64_t secs_per_pg = LOGICAL_PAGE_SIZE/zns->lbasz;
+    uint64_t start_lpn = lba / secs_per_pg;
+    uint64_t end_lpn = (lba + nlb - 1) / secs_per_pg;
+    int number_ppn_to_read = 1;
+    DMADirection dir = DMA_DIRECTION_FROM_DEVICE;
+
+    for(uint64_t lpn = start_lpn, int sg_cur_index = 0; lpn <= end_lpn; lpn++, sg_cur_index++){
+        struct ppa ppa;
+        uint64_t gap;
+        uint16_t residue = malloc(2048);
+        int ret = get_right_ppa_from_oob(n, cmd, start_lpn, ppa, &gap, &residue);
+        if(ret == 0){
+            uint64_t data_offset = ((ppa.g.ch * zns->num_lun * zns->num_plane * zns->num_blk * zns->num_page) +
+                           (ppa.g.fc * zns->num_plane * zns->num_blk * zns->num_page) +
+                           (ppa.g.pl * zns->num_blk * zns->num_page) +
+                           (ppa.g.blk * zns->num_page) + ppa.g.pg) * ZNS_PAGE_SIZE;
+            void *mb_2 = n->mbe->logical_space;
+            void *mb = g_malloc(ZNS_PAGE_SIZE); //这个空间大小需要根据实际情况调整
+            uint32_t outputlen = 0;
+            //todo:先要从backend读取数据 再传给decompress
+            //FIXME*: only support sg_cur_byte == (&req->qsg)->sg[sg_cur_index].len
+            if(dma_memory_rw((&req->qsg)->as,(&req->qsg)->sg[sg_cur_index].base, mb_2+&(residue+data_offset[0]), ZNS_PAGE_SIZE - residue, dir, MEMTXATTRS_UNSPECIFIED)){
+                femu_err("dma_memory_rw error\n");
+            }
+            //refer to nvme_addr_read
+            qat_dc_decompress(n,0,(void *)&n->cmbuf[(&req->qsg)->sg[sg_cur_index].base - n->ctrl_mem.addr],ZNS_PAGE_SIZE - residue, mb, &outputlen, 1, ZNS_PAGE_SIZE, gap);
+            if(outputlen < ZNS_PAGE_SIZE){
+                //cross physical page
+                void *newmb = malloc(ZNS_PAGE_SIZE-outputlen);
+                uint32_t newoutputlen = 0;
+                uint64_t lpn_t = lpn + 1;
+                struct ppa nextppa = get_maptbl_ent(n->zns, lpn_t);
+                void *meta = malloc(n->zns->meta_len - n->zns->int_meta_size);
+                zns_read_oob_meta(n->zns, nextppa, meta);
+                memcpy(&residue, meta+4, 2);
+                data_offset = ((nextppa.g.ch * zns->num_lun * zns->num_plane * zns->num_blk * zns->num_page) +
+                           (nextppa.g.fc * zns->num_plane * zns->num_blk * zns->num_page) +
+                           (nextppa.g.pl * zns->num_blk * zns->num_page) +
+                           (nextppa.g.blk * zns->num_page) + nextppa.g.pg) * ZNS_PAGE_SIZE;
+                qat_dc_decompress(n,0,mb_2+data_offset[0],residue, newmb, &newoutputlen, 1, ZNS_PAGE_SIZE-outputlen, 0);
+                if(newoutputlen != ZNS_PAGE_SIZE-outputlen){
+                    fprintf(file, "newoutputlen != ZNS_PAGE_SIZE-outputlen \n");
+                }
+                memcpy(mb+outputlen, newmb, ZNS_PAGE_SIZE-outputlen);
+            }
+        } else {
+            femu_err("get ppn error!\n");
+        }
+
+        //传给req
+        
+
+    }
+}
+#endif
 /*Misao: backend read/write without latency emulation*/
 static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
                            NvmeRequest *req,bool append)
