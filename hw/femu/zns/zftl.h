@@ -7,7 +7,11 @@
 #define INVALID_LPN     (~(0ULL))
 #define UNMAPPED_PPA    (~(0ULL))
 
+// #ifdef READ_1
+// void zftl_init(NvmeNamespace *ns, FemuCtrl *n);
+// #else
 void zftl_init(FemuCtrl *n);
+//#endif
 
 #ifdef FEMU_DEBUG_ZFTL
 #define ftl_debug(fmt, ...) \

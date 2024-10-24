@@ -11,6 +11,7 @@
 #include "../nvme.h"
 #include "zftl.h"
 
+extern NvmeNamespace * global_ns;
 #define LOGICAL_PAGE_SIZE (4*KiB)
 #define ZNS_PAGE_SIZE (4*KiB)
 #define ZNS_DEFAULT_NUM_WRITE_CACHE (3)
@@ -32,7 +33,7 @@
  */
 #define SLC_PROGRAM_LATENCY_NS (75000)
 #define TLC_PROGRAM_LATENCY_NS (937500)
-#define QLC_PROGRAM_LATENCY_NS (12196000)
+#define QLC_PROGRAM_LATENCY_NS (12196000) //12196000
 
 #define SLC_READ_LATENCY_NS (4000)
 #define TLC_READ_LATENCY_NS (32000)

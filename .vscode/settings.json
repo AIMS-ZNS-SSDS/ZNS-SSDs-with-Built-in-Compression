@@ -15,6 +15,11 @@
         "*.tmpl": "c",
         "*.idef": "c",
         "mode-selection.h": "c",
-        "*.code": "c"
+        "*.code": "c",
+        "compare": "c",
+        "msix.h": "c",
+        "pci.h": "c",
+        "stdio.h": "c",
+        "timing.h": "c"
     }
 }

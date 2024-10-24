@@ -17,7 +17,7 @@
 #include "qemu-thread-common.h"
 #include "qemu/tsan.h"
 #include "qemu/bitmap.h"
-
+#include "../hw/femu/zns/mode-selection.h"
 #ifdef CONFIG_PTHREAD_SET_NAME_NP
 #include <pthread_np.h>
 #endif
@@ -499,6 +499,63 @@ typedef struct {
     char *name;
 } QemuThreadArgs;
 
+// #ifdef READ_1
+// typedef struct {
+//     void *(*start_routine)(void *, void*);
+//     void *arg;
+//     void *arg2;
+//     char *name;
+// } QemuThreadArgs2;
+
+// static void *qemu_thread_start2(void *args)
+// {
+//     QemuThreadArgs2 *qemu_thread_args = args;
+//     void *(*start_routine)(void *, void *) = qemu_thread_args->start_routine;
+//     void *arg = qemu_thread_args->arg;
+//     void *arg2 = qemu_thread_args->arg2;
+//     void *r;
+
+//     /* Attempt to set the threads name; note that this is for debug, so
+//      * we're not going to fail if we can't set it.
+//      */
+//     if (name_threads && qemu_thread_args->name) {
+// # if defined(CONFIG_PTHREAD_SETNAME_NP_W_TID)
+//         pthread_setname_np(pthread_self(), qemu_thread_args->name);
+// # elif defined(CONFIG_PTHREAD_SETNAME_NP_WO_TID)
+//         pthread_setname_np(qemu_thread_args->name);
+// # elif defined(CONFIG_PTHREAD_SET_NAME_NP)
+//         pthread_set_name_np(pthread_self(), qemu_thread_args->name);
+// # endif
+//     }
+//     QEMU_TSAN_ANNOTATE_THREAD_NAME(qemu_thread_args->name);
+//     g_free(qemu_thread_args->name);
+//     g_free(qemu_thread_args);
+
+//     /*
+//      * GCC 11 with glibc 2.17 on PowerPC reports
+//      *
+//      * qemu-thread-posix.c:540:5: error: ‘__sigsetjmp’ accessing 656 bytes
+//      *   in a region of size 528 [-Werror=stringop-overflow=]
+//      * 540 |     pthread_cleanup_push(qemu_thread_atexit_notify, NULL);
+//      *     |     ^~~~~~~~~~~~~~~~~~~~
+//      *
+//      * which is clearly nonsense.
+//      */
+// #pragma GCC diagnostic push
+// #ifndef __clang__
+// #pragma GCC diagnostic ignored "-Wstringop-overflow"
+// #endif
+
+//     pthread_cleanup_push(qemu_thread_atexit_notify, NULL);
+//     r = start_routine(arg, arg2);
+//     pthread_cleanup_pop(1);
+
+// #pragma GCC diagnostic pop
+
+//     return r;
+// }
+// #endif
+
 static void *qemu_thread_start(void *args)
 {
     QemuThreadArgs *qemu_thread_args = args;
@@ -545,6 +602,52 @@ static void *qemu_thread_start(void *args)
 
     return r;
 }
+
+// #ifdef READ_1
+// void qemu_thread_create2(QemuThread *thread, const char *name,
+//                        void *(*start_routine)(void*, void*),
+//                        void *arg, void *arg2, int mode)
+// {
+//     sigset_t set, oldset;
+//     int err;
+//     pthread_attr_t attr;
+//     QemuThreadArgs2 *qemu_thread_args;
+
+//     err = pthread_attr_init(&attr);
+//     if (err) {
+//         error_exit(err, __func__);
+//     }
+
+//     if (mode == QEMU_THREAD_DETACHED) {
+//         pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+//     }
+
+//     /* Leave signal handling to the iothread.  */
+//     sigfillset(&set);
+//     /* Blocking the signals can result in undefined behaviour. */
+//     sigdelset(&set, SIGSEGV);
+//     sigdelset(&set, SIGFPE);
+//     sigdelset(&set, SIGILL);
+//     /* TODO avoid SIGBUS loss on macOS */
+//     pthread_sigmask(SIG_SETMASK, &set, &oldset);
+
+//     qemu_thread_args = g_new0(QemuThreadArgs2, 1);
+//     qemu_thread_args->name = g_strdup(name);
+//     qemu_thread_args->start_routine = start_routine;
+//     qemu_thread_args->arg = arg;
+//     qemu_thread_args->arg2 = arg2;
+//     err = pthread_create(&thread->thread, &attr,
+//                          qemu_thread_start2, qemu_thread_args);
+
+//     if (err)
+//         error_exit(err, __func__);
+
+//     pthread_sigmask(SIG_SETMASK, &oldset, NULL);
+
+//     pthread_attr_destroy(&attr);
+// }
+
+// #endif
 
 void qemu_thread_create(QemuThread *thread, const char *name,
                        void *(*start_routine)(void*),

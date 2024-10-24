@@ -4,6 +4,7 @@
 #include "qemu/processor.h"
 #include "qemu/atomic.h"
 #include "qemu/clang-tsa.h"
+#include "hw/femu/zns/mode-selection.h"
 
 typedef struct QemuCond QemuCond;
 typedef struct QemuSemaphore QemuSemaphore;
@@ -186,6 +187,11 @@ void qemu_event_reset(QemuEvent *ev);
 void qemu_event_wait(QemuEvent *ev);
 void qemu_event_destroy(QemuEvent *ev);
 
+// #ifdef READ_1
+// void qemu_thread_create2(QemuThread *thread, const char *name,
+//                         void *(*start_routine)(void *, void*),
+//                         void *arg, void *arg2, int mode);
+// #endif
 void qemu_thread_create(QemuThread *thread, const char *name,
                         void *(*start_routine)(void *),
                         void *arg, int mode);

@@ -62,9 +62,10 @@ int backend_rw(SsdDramBackend *b, QEMUSGList *qsg, uint64_t *lbal, bool is_write
         } else {
             assert(0);
         }
+        //printf("sg_cur_index:%d  base:0x%lx\n",sg_cur_index,cur_addr);
     }
 
-    printf("mb_oft:%lu\n",mb_oft);
+    //printf("mb_oft:%lu\n",mb_oft);
     qemu_sglist_destroy(qsg);
 
     return 0;

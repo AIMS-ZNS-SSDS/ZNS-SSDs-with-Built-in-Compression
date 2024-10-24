@@ -1,5 +1,7 @@
 #include "./nvme.h"
-
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
 static uint16_t nvme_io_cmd(FemuCtrl *n, NvmeCmd *cmd, NvmeRequest *req);
 
 static void nvme_update_sq_eventidx(const NvmeSQueue *sq)
@@ -38,6 +40,8 @@ static inline void nvme_copy_cmd(NvmeCmd *dst, NvmeCmd *src)
 
 static void nvme_process_sq_io(void *opaque, int index_poller)
 {
+    // FILE *f = fopen("sysread.txt","a");
+    // fprintf(f,"nvme_process_sq_io\n");
     NvmeSQueue *sq = opaque;
     FemuCtrl *n = sq->ctrl;
 
@@ -92,6 +96,7 @@ static void nvme_process_sq_io(void *opaque, int index_poller)
 
     nvme_update_sq_eventidx(sq);
     sq->completed += processed;
+    //fclose(f);
 }
 
 static void nvme_post_cqe(NvmeCQueue *cq, NvmeRequest *req)
@@ -192,6 +197,8 @@ static void nvme_process_cq_cpl(void *arg, int index_poller)
 
 void *nvme_poller(void *arg)
 {
+    // FILE *f = fopen("sysread.txt","a");
+    // fprintf(f, "nvme_poller\n");
     FemuCtrl *n = ((NvmePollerThreadArgument *)arg)->n;
     int index = ((NvmePollerThreadArgument *)arg)->index;
     int i;
@@ -199,6 +206,7 @@ void *nvme_poller(void *arg)
     switch (n->multipoller_enabled) {
     case 1:
         while (1) {
+            //fprintf(f,"case 1\n");
             if ((!n->dataplane_started)) {
                 usleep(1000);
                 continue;
@@ -218,7 +226,7 @@ void *nvme_poller(void *arg)
                 usleep(1000);
                 continue;
             }
-
+            //fprintf(f,"case 2\n");
             for (i = 1; i <= n->nr_io_queues; i++) {
                 NvmeSQueue *sq = n->sq[i];
                 NvmeCQueue *cq = n->cq[i];
@@ -231,6 +239,8 @@ void *nvme_poller(void *arg)
         break;
     }
 
+    //fprintf(f,"end of poller\n");
+    //fclose(f);
     return NULL;
 }
 
