@@ -7,7 +7,7 @@
 # Image directory
 IMGDIR=$HOME/images
 # Virtual machine disk image
-OSIMGF=$IMGDIR/u20s.qcow2
+OSIMGF=$IMGDIR/femu.qcow2
 
 if [[ ! -e "$OSIMGF" ]]; then
 	echo ""
@@ -47,7 +47,7 @@ sudo ./qemu-system-x86_64 \
     -device scsi-hd,drive=hd0 \
     -drive file=$OSIMGF,if=none,aio=native,cache=none,format=qcow2,id=hd0 \
     ${FEMU_OPTIONS} \
-    -net user,hostfwd=tcp::8081-:22 \
+    -net user,hostfwd=tcp::8082-:22 \
     -net nic,model=virtio \
     -nographic \
     -qmp unix:./qmp-sock,server,nowait 2>&1 | tee log

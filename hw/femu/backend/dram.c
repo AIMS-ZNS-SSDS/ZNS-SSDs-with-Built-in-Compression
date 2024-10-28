@@ -55,8 +55,8 @@ int backend_rw(SsdDramBackend *b, QEMUSGList *qsg, uint64_t *lbal, bool is_write
             ++sg_cur_index;
         }
         
-        if(is_write){
-        printf("now we are in backend_rw\n");}
+        // if(is_write){
+        // printf("now we are in backend_rw\n");}
 
         if (b->femu_mode == FEMU_OCSSD_MODE) {
             mb_oft = lbal[sg_cur_index];

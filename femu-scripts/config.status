@@ -16,7 +16,7 @@ unset LD_LIBRARY_PATH
 unset NM
 unset OBJCFLAGS
 unset OBJCOPY
-PATH='/home/wpy/.vscode-server/cli/servers/Stable-fee1edb8d6d72a0ddff41e5f71a671c23ed924b9/server/bin/remote-cli:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin'
+PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin'
 export PATH
 unset PKG_CONFIG
 unset PKG_CONFIG_LIBDIR

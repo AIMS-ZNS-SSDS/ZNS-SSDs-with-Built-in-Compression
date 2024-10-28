@@ -960,69 +960,129 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
         printf("nvme zone append\n");
     }
 
+    #ifdef COMPRESS
+    uint32_t compressed_len=24;//测试方便，写死
     if((req->is_write)){
         //added by wpy
         printf("qat compress test\n");
-        qat_init(n);
+        // qat_init(n);
         int sg_cur_index = 0;
         dma_addr_t sg_cur_byte = 0;
-        dma_addr_t cur_len;
-        uint64_t mb_oft = (&data_offset)[0];
-        void *mb = n->mbe->logical_space;
-        uint32_t outputlen = 0;
+        dma_addr_t cur_addr;
 
+        /*原始数据，用于压缩*/        
+        uint64_t mb_oft_2 = (&data_offset)[0];
+        void *mb_2 = n->mbe->logical_space;
+        
+        /*压缩后数据*/
+        void *mb = g_malloc(4096); //这个空间大小需要根据实际情况调整
+
+        uint32_t outputlen = 0;
+        DMADirection dir = DMA_DIRECTION_TO_DEVICE;
         // CpaDcDpOpData **opData = n->dc_op_datas;
         while (sg_cur_index < (&req->qsg)->nsg){
-            //cur_addr = qsg->sg[sg_cur_index].base + sg_cur_byte;
-            cur_len = (&req->qsg)->sg[sg_cur_index].len - sg_cur_byte;
-            
-            qat_dc_compress(n,0,mb+mb_oft,cur_len,&outputlen,1);
-            fprintf(stdout,"compress %lu bytes to %u bytes\n",cur_len,outputlen);
+            cur_addr = (&req->qsg)->sg[sg_cur_index].base + sg_cur_byte;
+            // cur_len = (&req->qsg)->sg[sg_cur_index].len - sg_cur_byte;
 
-            
-            // if (n->dc_op_datas == NULL) {
-            // printf("Invalid operation data structure.\n");
-            // return;
-            // }
-            printf("Compression Info:\n");
-            // 源缓冲区的物理地址和长度
-            printf("Source buffer physical address: 0x%lx\n", (unsigned long)n->dc_op_datas[0]->srcBuffer);
-            printf("Source buffer length: %u bytes\n", n->dc_op_datas[0]->srcBufferLen);
+            qat_dc_compress(n,0,mb_2+mb_oft_2,req->qsg.sg[sg_cur_index].len,mb, &outputlen,1);
+            fprintf(stdout,"compress %lu bytes to %u bytes\n",req->qsg.sg[sg_cur_index].len,outputlen);
+            // fprintf(stdout,"compress %lu bytes to %u bytes\n",req->qsg.sg[sg_cur_index].len,outputlen);
+            // fprintf(stdout,"current addr %lu, outputlen %u\n",cur_addr,outputlen);
 
-            // 目标缓冲区的物理地址和长度
-            printf("Destination buffer physical address: 0x%lx\n",(unsigned long) n->dc_op_datas[0]->destBuffer);
-            printf("Destination buffer length: %u bytes\n", n->dc_op_datas[0]->destBufferLen);
-            
+            // (&req->qsg)->sg[sg_cur_index].len = outputlen;
+            // (&req->qsg)->size = outputlen;
+            if (dma_memory_rw((&req->qsg)->as, cur_addr, mb, outputlen, dir, MEMTXATTRS_UNSPECIFIED)) {
+                femu_err("dma_memory_rw error\n");
+            }
 
-            // void *dest_buffer = (void *)(uintptr_t)n->dc_op_datas[0]->destBuffer; // 将物理地址转换为指针
-            // printf("destbuffer content: %.*s\n", outputlen, (char *)dest_buffer); // 输出字符串内容
-
-            sg_cur_byte += cur_len;
-            if (sg_cur_byte == (&req->qsg)->sg[sg_cur_index].len) {
+            //sg_cur_byte += cur_len;
+            sg_cur_byte += outputlen;
+            if (sg_cur_byte >= (&req->qsg)->sg[sg_cur_index].len) {
                 sg_cur_byte = 0;
                 ++sg_cur_index;
             }
-            mb_oft += cur_len;
+            ++sg_cur_index;//这里是为了测试append一次写入，实际情况下更为复杂，这一行需要删除
+            // mb_oft_2 += 4096; //为了这次测试方便我把大小写死了，但是需要将这个变为自适应的
+            mb_oft_2 += req->qsg.sg[sg_cur_index].len; 
+            
+            
         }
         
-        qat_exit(n);
-        // update compressed data to req->qsg
-        
-        printf("qsg->base: 0x%lx\n",(&req->qsg)->sg[0].base);
-        // printf("qsg->base content: %s\n",(&req->qsg)->sg[0].base);
-        printf("qsg->len: %lu\n",(&req->qsg)->sg[0].len);
-        printf("qsg->size: %lu\n",(&req->qsg)->size);
-        (&req->qsg)->sg[0].base = n->dc_op_datas[0]->destBuffer;
-        (&req->qsg)->sg[0].len = outputlen;
-        (&req->qsg)->size = outputlen;
-        // printf("destbuffer content: %s\n",n->dc_dst_buffer[0]);
+        // qat_exit(n);
+        // qemu_sglist_destroy(&req->qsg);
+        //backend_rw(n->mbe, &req->qsg, &data_offset, req->is_write);
 
-        backend_rw(n->mbe, &req->qsg, &data_offset, req->is_write);
+        // printf("qat decompress test\n");
+        // qat_init(n);
+        // sg_cur_index = 0;
+        // sg_cur_byte = 0;
+
+        // // uint64_t mb_oft_decom = (&data_offset)[0];
+        // // void *mb_decom = n->mbe->logical_space;
+
+        // void *mb_buffer1 = g_malloc(4096);//解压前数据
+        // void *mb_buffer2 = g_malloc(4096);//解压后数据
+
+        // uint32_t inputlen = compressed_len;
+        // outputlen = 0;
+        // dir = DMA_DIRECTION_FROM_DEVICE;
+        // while (sg_cur_index < (&req->qsg)->nsg){
+        //     cur_addr = (&req->qsg)->sg[sg_cur_index].base + sg_cur_byte;
+
+        //     if (dma_memory_rw((&req->qsg)->as, cur_addr, mb_buffer1, inputlen, dir, MEMTXATTRS_UNSPECIFIED)) {
+        //         femu_err("dma_memory_rw error\n");
+        //     }
+        //     qat_dc_decompress(n,0,mb_buffer1, 4096,mb_buffer2,&outputlen,1);
+        //     fprintf(stdout,"decompress %u bytes to %u bytes\n",inputlen,outputlen);
+
+        //     sg_cur_byte += inputlen;
+        //     if (sg_cur_byte >= (&req->qsg)->sg[sg_cur_index].len) {
+        //         sg_cur_byte = 0;
+        //         ++sg_cur_index;
+        //     }
+        //     // mb_oft_decom += outputlen;
+        //     sg_cur_index++;//这里是为了测试，实际情况需要删除
+        // }
+        // qat_exit(n);
+        // qemu_sglist_destroy(&req->qsg);
     }
     else{
         backend_rw(n->mbe, &req->qsg, &data_offset, req->is_write);
+        // printf("qat decompress test\n");
+        // qat_init(n);
+        // int sg_cur_index = 0;
+        // dma_addr_t sg_cur_byte = 0;
+        // dma_addr_t cur_addr;
+
+        // // uint64_t mb_oft_decom = (&data_offset)[0];
+        // // void *mb_decom = n->mbe->logical_space;
+
+        // void *mb_buffer1 = g_malloc(4096);//解压前数据
+        // void *mb_buffer2 = g_malloc(4096);//解压后数据
+
+        // uint32_t inputlen = compressed_len;
+        // uint32_t outputlen = 0;
+        // DMADirection dir = DMA_DIRECTION_FROM_DEVICE;
+        // while (sg_cur_index < (&req->qsg)->nsg){
+        //     cur_addr = (&req->qsg)->sg[sg_cur_index].base + sg_cur_byte;
+
+        //     if (dma_memory_rw((&req->qsg)->as, cur_addr, mb_buffer1, inputlen, dir, MEMTXATTRS_UNSPECIFIED)) {
+        //         femu_err("dma_memory_rw error\n");
+        //     }
+        //     qat_dc_decompress(n,0,mb_buffer1, inputlen,mb_buffer2,&outputlen,1);
+        //     fprintf(stdout,"decompress %u bytes to %u bytes\n",inputlen,outputlen);
+
+        //     sg_cur_byte += inputlen;
+        //     if (sg_cur_byte >= (&req->qsg)->sg[sg_cur_index].len) {
+        //         sg_cur_byte = 0;
+        //         ++sg_cur_index;
+        //     }
+        //     // mb_oft_decom += outputlen;
+        // }
+        // qat_exit(n);
+        // qemu_sglist_destroy(&req->qsg);
     }
-    
+    #endif
 
 
     if(req->is_write)
@@ -1468,6 +1528,9 @@ static int zns_start_ctrl(FemuCtrl *n)
 static void zns_init(FemuCtrl *n, Error **errp)
 {
     NvmeNamespace *ns = &n->namespaces[0];
+    #ifdef COMPRESS
+    qat_init(n);
+    #endif
 
     zns_set_ctrl(n);
     zns_init_params(n);
@@ -1486,6 +1549,9 @@ static void zns_exit(FemuCtrl *n)
     /*
      * Release any extra resource (zones) allocated for ZNS mode
      */
+    #ifdef COMPRESS
+    qat_exit(n);
+    #endif
 }
 
 int nvme_register_znssd(FemuCtrl *n)
