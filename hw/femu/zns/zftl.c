@@ -216,6 +216,7 @@ static int zns_write_oob_meta(struct zns_ssd* zns, struct ppa ppa, void *meta)
     return 0;
 }
 
+#ifdef READ_1
 /* Read a single out-of-bound (OOB) area entry */
 static int zns_read_oob_meta(struct zns_ssd* zns, struct ppa ppa, void *meta)
 {
@@ -232,6 +233,7 @@ static int zns_read_oob_meta(struct zns_ssd* zns, struct ppa ppa, void *meta)
     return 0;
 }
 #endif
+#endif
 
 #ifdef CHECK_READ_RIGHT
 //这个函数用来模拟learned index中的错误。
@@ -245,42 +247,37 @@ static inline uint64_t random_uint64(uint64_t min, uint64_t max) {
 //     return 
 // }
 
-// static inline uint64_t random_adjust_lpn(uint64_t lpn, uint64_t low_n, uint64_t high_n, uint32_t first_4_bytes) {
-//     // 计算增加和减少的范围
-//     uint64_t increase_min = low_n + first_4_bytes - lpn - 1;
-//     uint64_t increase_max = low_n;
-//     uint64_t decrease_min = lpn - first_4_bytes;
-//     uint64_t decrease_max = high_n;
+static inline uint64_t random_adjust_lpn(uint64_t lpn, uint64_t low_n, uint64_t high_n, uint32_t first_4_bytes) {
+    // 计算增加和减少的范围
+    uint64_t increase_min = low_n + first_4_bytes - lpn - 1;
+    uint64_t increase_max = low_n;
+    uint64_t decrease_min = lpn - first_4_bytes;
+    uint64_t decrease_max = high_n;
 
-//     // 检查范围是否合法
-//     if (increase_min > increase_max || decrease_min > decrease_max) {
-//         fprintf(stderr, "Invalid ranges for LPN adjustment!\n");
-//         return lpn;  // 返回原始 lpn
-//     }
+    // 检查范围是否合法
+    if (increase_min > increase_max || decrease_min > decrease_max) {
+        fprintf(stderr, "Invalid ranges for LPN adjustment!\n");
+        return lpn;  // 返回原始 lpn
+    }
 
-//     // 生成随机概率
-//     double p = (double)rand() / (double)RAND_MAX;
+    // 生成随机概率
+    double p = (double)rand() / (double)RAND_MAX;
 
-//     // 根据概率执行：不变、增加或减少
-//     if (p < 0.33) {
-//         // 不变，直接返回原始 lpn
-//         return lpn;
-//     } else if (p < 0.66) {
-//         // 执行增加操作
-//         return random_uint64(increase_min, increase_max);
-//     } else {
-//         // 执行减少操作
-//         return random_uint64(decrease_min, decrease_max);
-//     }
-// }
+    // 根据概率执行：不变、增加或减少
+    if (p < 0.33) {
+        // 不变，直接返回原始 lpn
+        return lpn;
+    } else if (p < 0.66) {
+        // 执行增加操作
+        return random_uint64(increase_min, increase_max);
+    } else {
+        // 执行减少操作
+        return random_uint64(decrease_min, decrease_max);
+    }
+}
 
 /*interface for getting ppn from learned index, modify the paramters as you need*/
 static inline struct ppa get_right_ppa_from_oob(FemuCtrl *n, NvmeCmd cmd, uint64_t lpn, uint64_t *gap, uint16_t *residue){
-    if(lpn >= n->zns->l2p_sz){
-        struct ppa ppa_from_li;
-        ppa_from_li.ppa = UNMAPPED_PPA;
-        return ppa_from_li;
-    }
     //FILE *f = fopen("readdebug.txt", "a");
     struct ppa ppa_from_li = get_maptbl_ent(n->zns, lpn);
     //fprintf(f,"lpn:%lu ppn:%lu \n", lpn, ppa_from_li.ppa);
@@ -299,8 +296,8 @@ static inline struct ppa get_right_ppa_from_oob(FemuCtrl *n, NvmeCmd cmd, uint64
 
     //模拟得到错误的ppn
     //std::memset(meta, 0, n->zns->sos);
-    //uint64_t fake_lpn = random_adjust_lpn(lpn, low_n, high_n, first_4_bytes);
-    uint64_t fake_lpn = lpn;
+    uint64_t fake_lpn = random_adjust_lpn(lpn, low_n, high_n, first_4_bytes);
+    //uint64_t fake_lpn = lpn;
     ppa_from_li = get_maptbl_ent(n->zns, fake_lpn);
     zns_read_oob_meta(n->zns, ppa_from_li, meta);
     // 提取前 4 byte (uint32_t)
@@ -314,6 +311,7 @@ static inline struct ppa get_right_ppa_from_oob(FemuCtrl *n, NvmeCmd cmd, uint64
         memcpy(residue, meta + 4, 2); 
         *gap = lpn - first_4_bytes;
         //printf("lpn: %lu, first_4_bytes: %u, high_n: %u, low_n: %u, gap: %lu\n", lpn, first_4_bytes, high_n, low_n, *gap);
+        free(meta);
         return ppa_from_li;
     } else if(lpn<first_4_bytes && lpn >= first_4_bytes - high_n){
         struct ppa ppa = get_maptbl_ent(n->zns, (uint64_t)(first_4_bytes - 1));
@@ -321,6 +319,7 @@ static inline struct ppa get_right_ppa_from_oob(FemuCtrl *n, NvmeCmd cmd, uint64
         memmove(&first_4_bytes, meta, 4);
         *gap = lpn - first_4_bytes;
         memcpy(residue, meta + 4, 2);
+        free(meta);
         return ppa;
     } else if(lpn>first_4_bytes && lpn >=first_4_bytes + low_n){
         struct ppa ppa = get_maptbl_ent(n->zns, (uint64_t)(first_4_bytes + low_n));
@@ -328,115 +327,173 @@ static inline struct ppa get_right_ppa_from_oob(FemuCtrl *n, NvmeCmd cmd, uint64
         memmove(&first_4_bytes, meta, 4);
         *gap = lpn - first_4_bytes;
         memcpy(residue, meta + 4, 2);
+        free(meta);
         return ppa;
     } else {
         ppa_from_li.ppa = UNMAPPED_PPA;
         femu_err("get ppn error!\n");
+        free(meta);
+        return ppa_from_li;
     }
-    return ppa_from_li;
 }   
 #endif
 
 #ifdef READ_1
 static uint64_t read_with_ppn(FemuCtrl *n, NvmeCmd cmd, NvmeRequest *req){
-    uint64_t sublat, maxlat = 0;
+    uint64_t sublat = 0;
+    uint64_t sublat1 = 0;
+    uint64_t sublat2 = 0;
+    uint64_t maxlat = 0;
     uint64_t lba = req->slba;
     uint32_t nlb = req->nlb;
     uint64_t secs_per_pg = LOGICAL_PAGE_SIZE/n->zns->lbasz;
     uint64_t start_lpn = lba / secs_per_pg;
     uint64_t end_lpn = (lba + nlb - 1) / secs_per_pg;
+    //uint64_t n_lpn = end_lpn - start_lpn + 1;
     //int number_ppn_to_read = 1;
-    DMADirection dir = DMA_DIRECTION_FROM_DEVICE;
-
+   //DMADirection dir = DMA_DIRECTION_FROM_DEVICE;
     //for normal read
-    uint64_t data_offset2 = zns_l2b(global_ns,lba);
-    uint64_t mb_of = (&data_offset2)[0];
-    int sg_cur_index = 0;
-    dma_addr_t sg_cur_byte = 0;
-    dma_addr_t cur_addr, cur_len;
+    // uint64_t data_offset2 = zns_l2b(global_ns,lba);
+    // uint64_t mb_of = (&data_offset2)[0];
+    // int sg_cur_index = 0;
+    // dma_addr_t sg_cur_byte = 0;
+    // dma_addr_t cur_addr, cur_len;
 
-    for(uint64_t lpn = start_lpn; lpn <= end_lpn; lpn++){
-        struct ppa ppa;
+    for(uint64_t lpn = start_lpn; lpn <= end_lpn;){
         uint64_t gap =0;
         uint16_t residue = 0;
-        ppa = get_right_ppa_from_oob(n, cmd, lpn, &gap, &residue);
-        // if (!mapped_ppa(&ppa) || !valid_ppa(n->zns, &ppa)) {
-        //     //femu_log("ppa not mapped, skip\n");
-
-        //     continue;
-        // }
-        uint64_t data_offset = ((ppa.g.ch * n->zns->num_lun * n->zns->num_plane * n->zns->num_blk * n->zns->num_page) +
-                        (ppa.g.fc * n->zns->num_plane * n->zns->num_blk * n->zns->num_page) +
-                        (ppa.g.pl * n->zns->num_blk * n->zns->num_page) +
-                        (ppa.g.blk * n->zns->num_page) + ppa.g.pg) * ZNS_PAGE_SIZE + residue;
-        void *mb_2 = n->mbe->logical_space;
-        void *mb = g_malloc(ZNS_PAGE_SIZE); //这个空间大小需要根据实际情况调整
-        uint32_t outputlen = 0;
-        uint64_t off = (&data_offset)[0];
-
-        //for normal read
+        struct ppa ppa = get_right_ppa_from_oob(n, cmd, lpn, &gap, &residue);
         if (!mapped_ppa(&ppa) || !valid_ppa(n->zns, &ppa)) {
             //femu_log("ppa not mapped, skip\n");
-            cur_addr = req->qsg.sg[sg_cur_index].base + sg_cur_byte;
-            cur_len = req->qsg.sg[sg_cur_index].len - sg_cur_byte;
-            if (dma_memory_rw((&req->qsg)->as, cur_addr, mb_2 + mb_of, cur_len, dir, MEMTXATTRS_UNSPECIFIED)) {
-                femu_err("dma_memory_rw error\n");
-            }
-            sg_cur_byte += cur_len;
-            if (sg_cur_byte == (&req->qsg)->sg[sg_cur_index].len) {
-                sg_cur_byte = 0;
-                ++sg_cur_index;
-            }
-
-            
-            mb_of += cur_len;
-            
+            lpn++;
             continue;
+        
         }
 
-        //todo:先要从backend读取数据 再传给decompress
-        //FIXME*: only support sg_cur_byte == (&req->qsg)->sg[sg_cur_index].len
-        if(dma_memory_rw((&req->qsg)->as,(&req->qsg)->sg[sg_cur_index].base, mb_2+off, ZNS_PAGE_SIZE - residue, dir, MEMTXATTRS_UNSPECIFIED)){
-            femu_err("dma_memory_rw error\n");
-        }
-        //refer to nvme_addr_read
-        qat_dc_decompress(n,0, mb_2+off, ZNS_PAGE_SIZE - residue, mb, &outputlen, 1, ZNS_PAGE_SIZE, gap);
+        char *meta = malloc(n->zns->sos);
+        zns_read_oob_meta(n->zns, ppa, meta);
+        // 提取前 4 byte (uint32_t)
+        uint32_t first_4_bytes;
+        uint8_t reverse_mapping;
+        memcpy(&first_4_bytes, meta, 4);
+        memcpy(&reverse_mapping, meta + 6, 1);
+        uint8_t low_n =  reverse_mapping & 0x0F;
 
         struct nand_cmd srd;
         srd.type = USER_IO;
         srd.cmd = NAND_READ;
         srd.stime = req->stime;
+        sublat1 = zns_advance_status(n->zns, &ppa, &srd);
 
-        sublat = zns_advance_status(n->zns, &ppa, &srd);
+        if((first_4_bytes+low_n - 1 == lpn) || (end_lpn-lpn+1) == (first_4_bytes+low_n-lpn)){ //可能跨页读
+            struct ppa ppa_next = get_maptbl_ent(n->zns, first_4_bytes + low_n);
+            char *meta2 = malloc(n->zns->sos);
+            zns_read_oob_meta(n->zns, ppa_next, meta2);
+            uint16_t residue2 = 0;
+            memcpy(&residue2,meta+4,2);
+            memcpy(&first_4_bytes, meta, 4);
+            memcpy(&reverse_mapping, meta + 6, 1);
+            low_n =  reverse_mapping & 0x0F;
 
-        if(outputlen < ZNS_PAGE_SIZE){
-            //cross physical page
-            void *newmb = malloc(ZNS_PAGE_SIZE-outputlen);
-            uint32_t newoutputlen = 0;
-            uint64_t lpn_t = lpn + 1;
-            struct ppa nextppa = get_maptbl_ent(n->zns, lpn_t);
-            void *meta = malloc(n->zns->meta_len - n->zns->int_meta_size);
-            zns_read_oob_meta(n->zns, nextppa, meta);
-            memcpy(&residue, meta+4, 2);
-            data_offset = ((nextppa.g.ch * n->zns->num_lun * n->zns->num_plane * n->zns->num_blk * n->zns->num_page) +
-                        (nextppa.g.fc * n->zns->num_plane * n->zns->num_blk * n->zns->num_page) +
-                        (nextppa.g.pl * n->zns->num_blk * n->zns->num_page) +
-                        (nextppa.g.blk * n->zns->num_page) + nextppa.g.pg) * ZNS_PAGE_SIZE;
-            qat_dc_decompress(n,0,mb_2+off,residue, newmb, &newoutputlen, 1, ZNS_PAGE_SIZE-outputlen, 0);
-            if(newoutputlen != ZNS_PAGE_SIZE-outputlen){
-                fprintf(stdout, "newoutputlen != ZNS_PAGE_SIZE-outputlen \n");
+            if(residue2 != 0){
+                // two pages read
+                sublat2 = zns_advance_status(n->zns, &ppa_next, &srd);
+                
             }
-            memcpy(mb+outputlen, newmb, ZNS_PAGE_SIZE-outputlen);
-            //memmove(n->mbe->logical_space + (&lba)[0], mb, nlb);
-            srd.stime = req->stime + sublat;
-            sublat += zns_advance_status(n->zns, &ppa, &srd);
+            lpn += first_4_bytes+low_n-lpn;
+        } else if((end_lpn-lpn+1) > (first_4_bytes+low_n-lpn)){ //必然跨页读
+            struct ppa ppa_next = get_maptbl_ent(n->zns, first_4_bytes + low_n);
+            char *meta2 = malloc(n->zns->sos);
+            zns_read_oob_meta(n->zns, ppa_next, meta2);
+            memcpy(&first_4_bytes, meta, 4);
+            memcpy(&reverse_mapping, meta + 6, 1);
+            low_n =  reverse_mapping & 0x0F;
+            sublat2 = zns_advance_status(n->zns, &ppa_next, &srd);
+            if(low_n >end_lpn){
+                lpn = end_lpn+1;
+            } else {
+                lpn += low_n;
+            }
+        } else { //不跨页读
+            lpn = end_lpn+1;
         }
-    
+        
+        //if not optimized, then sublat = sublat1 + sublat2;
+        sublat = (sublat1 > sublat2) ? sublat1 : sublat2;
         maxlat = (sublat > maxlat) ? sublat : maxlat;
-        sg_cur_index++;
 
-    }
-    return maxlat;
+        // uint64_t data_offset = ((ppa.g.ch * n->zns->num_lun * n->zns->num_plane * n->zns->num_blk * n->zns->num_page) +
+        //                 (ppa.g.fc * n->zns->num_plane * n->zns->num_blk * n->zns->num_page) +
+        //                 (ppa.g.pl * n->zns->num_blk * n->zns->num_page) +
+        //                 (ppa.g.blk * n->zns->num_page) + ppa.g.pg) * ZNS_PAGE_SIZE + residue;
+        // void *mb_2 = n->mbe->logical_space;
+        // void *mb = g_malloc(ZNS_PAGE_SIZE); //这个空间大小需要根据实际情况调整
+        // uint32_t outputlen = 0;
+        // uint64_t off = (&data_offset)[0];
+
+        // //for normal read
+        // if (!mapped_ppa(&ppa) || !valid_ppa(n->zns, &ppa)) {
+        //     //femu_log("ppa not mapped, skip\n");
+        //     cur_addr = req->qsg.sg[sg_cur_index].base + sg_cur_byte;
+        //     cur_len = req->qsg.sg[sg_cur_index].len - sg_cur_byte;
+        //     if (dma_memory_rw((&req->qsg)->as, cur_addr, mb_2 + mb_of, cur_len, dir, MEMTXATTRS_UNSPECIFIED)) {
+        //         femu_err("dma_memory_rw error\n");
+        //     }
+        //     sg_cur_byte += cur_len;
+        //     if (sg_cur_byte == (&req->qsg)->sg[sg_cur_index].len) {
+        //         sg_cur_byte = 0;
+        //         ++sg_cur_index;
+        //     }
+
+            
+        //     mb_of += cur_len;
+            
+        //     continue;
+        // }
+
+        //todo:先要从backend读取数据 再传给decompress
+        //FIXME*: only support sg_cur_byte == (&req->qsg)->sg[sg_cur_index].len
+        // if(dma_memory_rw((&req->qsg)->as,(&req->qsg)->sg[sg_cur_index].base, mb_2+off, ZNS_PAGE_SIZE - residue, dir, MEMTXATTRS_UNSPECIFIED)){
+        //     femu_err("dma_memory_rw error\n");
+        // }
+        // //refer to nvme_addr_read
+        // qat_dc_decompress(n,0, mb_2+off, ZNS_PAGE_SIZE - residue, mb, &outputlen, 1, ZNS_PAGE_SIZE, gap);
+
+    //     struct nand_cmd srd;
+    //     srd.type = USER_IO;
+    //     srd.cmd = NAND_READ;
+    //     srd.stime = req->stime;
+
+    //     sublat = zns_advance_status(n->zns, &ppa, &srd);
+
+    //     if(outputlen < ZNS_PAGE_SIZE){
+    //         //cross physical page
+    //         void *newmb = malloc(ZNS_PAGE_SIZE-outputlen);
+    //         uint32_t newoutputlen = 0;
+    //         uint64_t lpn_t = lpn + 1;
+    //         struct ppa nextppa = get_maptbl_ent(n->zns, lpn_t);
+    //         void *meta = malloc(n->zns->meta_len - n->zns->int_meta_size);
+    //         zns_read_oob_meta(n->zns, nextppa, meta);
+    //         memcpy(&residue, meta+4, 2);
+    //         data_offset = ((nextppa.g.ch * n->zns->num_lun * n->zns->num_plane * n->zns->num_blk * n->zns->num_page) +
+    //                     (nextppa.g.fc * n->zns->num_plane * n->zns->num_blk * n->zns->num_page) +
+    //                     (nextppa.g.pl * n->zns->num_blk * n->zns->num_page) +
+    //                     (nextppa.g.blk * n->zns->num_page) + nextppa.g.pg) * ZNS_PAGE_SIZE;
+    //         qat_dc_decompress(n,0,mb_2+off,residue, newmb, &newoutputlen, 1, ZNS_PAGE_SIZE-outputlen, 0);
+    //         if(newoutputlen != ZNS_PAGE_SIZE-outputlen){
+    //             fprintf(stdout, "newoutputlen != ZNS_PAGE_SIZE-outputlen \n");
+    //         }
+    //         memcpy(mb+outputlen, newmb, ZNS_PAGE_SIZE-outputlen);
+    //         //memmove(n->mbe->logical_space + (&lba)[0], mb, nlb);
+    //         srd.stime = req->stime + sublat;
+    //         sublat += zns_advance_status(n->zns, &ppa, &srd);
+    //     }
+    
+    //     maxlat = (sublat > maxlat) ? sublat : maxlat;
+    //     sg_cur_index++;
+
+     }
+     return maxlat;
 }
 #endif
 
