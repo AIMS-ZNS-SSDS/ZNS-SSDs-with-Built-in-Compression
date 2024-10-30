@@ -847,7 +847,8 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
     NvmeZone *zone;
     NvmeZonedResult *res = (NvmeZonedResult *)&req->cqe;
     assert(n->zoned);
-    req->is_write = ((rw->opcode == NVME_CMD_WRITE) || (rw->opcode == NVME_CMD_ZONE_APPEND)) ? 1 : 0;
+    //req->is_write = ((rw->opcode == NVME_CMD_WRITE) || (rw->opcode == NVME_CMD_ZONE_APPEND)) ? 1 : 0;
+    req->is_write = rw->opcode == NVME_CMD_WRITE ? 1 : 0;
     //printf("zns_nvme_rw is_write %d\n",req->is_write);
     //printf("nvme command:%u\n",rw->opcode);
     status = nvme_check_mdts(n, data_size);
@@ -911,7 +912,7 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
     req->nlb = nlb;
     
     #ifdef COMPRESS
-    if((req->is_write)){
+    if(((rw->opcode == NVME_CMD_WRITE) || (rw->opcode == NVME_CMD_ZONE_APPEND))){
         //added by wpy
         //printf("qat compress test\n");
         //qat_init(n);
