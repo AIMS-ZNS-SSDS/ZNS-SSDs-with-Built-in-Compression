@@ -937,28 +937,21 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
         while (sg_cur_index < req->qsg.nsg){
             uint32_t outputlen = req->qsg.sg[sg_cur_index].len;
 
-            #ifndef FINE_TUNE_COMP
             qat_dc_compress(n,0,mb_2+mb_oft_2,(req->qsg.sg[sg_cur_index].len - sg_cur_byte),mb, &outputlen,1);
             //printf("sg_cur_index : %d, outputlen : %d\n",sg_cur_index,outputlen);
 
             req->qsg.sg[sg_cur_index].len = outputlen;
             req->qsg.size = outputlen;
-            #endif
 
             (req->compressed_size)[sg_cur_index] = outputlen;
 
             cur_addr = req->qsg.sg[sg_cur_index].base + sg_cur_byte;
             cur_len = req->qsg.sg[sg_cur_index].len - sg_cur_byte;
 
-            #ifndef FINE_TUNE_COMP
             if (dma_memory_rw(req->qsg.as, cur_addr, mb, cur_len, dir, MEMTXATTRS_UNSPECIFIED)) {
                 femu_err("dma_memory_rw error\n");
             }
-            #else
-            if (dma_memory_rw(req->qsg.as, cur_addr, mb_2+mb_oft_2, cur_len, dir, MEMTXATTRS_UNSPECIFIED)) {
-                femu_err("dma_memory_rw error\n");
-            }
-            #endif
+            
             sg_cur_byte += cur_len;
             if (sg_cur_byte == req->qsg.sg[sg_cur_index].len) {
                 sg_cur_byte = 0;
