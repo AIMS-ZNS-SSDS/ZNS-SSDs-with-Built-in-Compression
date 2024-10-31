@@ -77,6 +77,9 @@ static void nvme_process_sq_io(void *opaque, int index_poller)
         }
 
         status = nvme_io_cmd(n, &cmd, req);
+        // FILE *f=fopen("boundry_debug.txt","a");
+        // fprintf(f,"【in nvme_process_sq_io status】:%u\n",status);
+        // fclose(f);
         if (1 && status == NVME_SUCCESS) {
             req->status = status;
 

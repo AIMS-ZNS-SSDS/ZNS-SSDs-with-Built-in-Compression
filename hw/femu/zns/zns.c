@@ -5,6 +5,7 @@
 #define NVME_DEFAULT_ZONE_SIZE      (128 * MiB)
 #define NVME_DEFAULT_MAX_AZ_SIZE    (128 * KiB)
 NvmeNamespace *global_ns = NULL;
+uint64_t count = 0;
 static inline uint32_t zns_zone_idx(NvmeNamespace *ns, uint64_t slba)
 {
     FemuCtrl *n = ns->ctrl;
@@ -16,7 +17,10 @@ static inline NvmeZone *zns_get_zone_by_slba(NvmeNamespace *ns, uint64_t slba)
 {
     FemuCtrl *n = ns->ctrl;
     uint32_t zone_idx = zns_zone_idx(ns, slba);
-
+    // FILE *f = fopen("boundry_debug.txt","a");
+    // fprintf(f,"zone:%p, zone_idx:%u, zone_slba:%lu, zone_end:%lu\n",&n->zone_array[zone_idx], zone_idx, n->zone_array[zone_idx].d.zslba, n->zone_array[zone_idx].d.zslba + n->zone_array[zone_idx].d.zcap);
+    // //fprintf(f,"zone_slba:%lu, zone_end:%lu\n",n->zone_array[zone_idx].d.zslba, n->zone_array[zone_idx])->d.zslba + n->zone_array[zone_idx]->d.zcap);
+    // fclose(f);
     assert(zone_idx < n->num_zones);
     return &n->zone_array[zone_idx];
 }
@@ -367,6 +371,9 @@ static uint16_t zns_check_zone_state_for_read(NvmeZone *zone)
 
 static uint16_t zns_check_zone_read(NvmeNamespace *ns, uint64_t slba, uint32_t nlb)
 {
+    // FILE *f=fopen("boundry_debug.txt","a");
+    // fprintf(f,"【zns_check_zone_read】\n");
+    // fclose(f);
     FemuCtrl *n = ns->ctrl;
     NvmeZone *zone = zns_get_zone_by_slba(ns, slba);
     uint64_t bndry = zns_zone_rd_boundary(ns, zone);
@@ -432,6 +439,9 @@ static uint16_t zns_auto_open_zone(NvmeNamespace *ns, NvmeZone *zone)
 
 static void zns_finalize_zoned_write(NvmeNamespace *ns, NvmeRequest *req, bool failed)
 {
+    // FILE *f = fopen("boundry_debug.txt","a");
+    // fprintf(f,"【zns_finalize_zoned_write】\n");
+    // fclose(f);
     NvmeRwCmd *rw = (NvmeRwCmd *)&req->cmd;
     NvmeZone *zone;
     NvmeZonedResult *res = (NvmeZonedResult *)&req->cqe;
@@ -842,6 +852,9 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
     uint32_t nlb = (uint32_t)le16_to_cpu(rw->nlb) + 1;
     uint64_t data_size = zns_l2b(ns, nlb);
     uint64_t data_offset;
+    #ifdef NO_FUNC
+    uint64_t data_offset2;
+    #endif
     uint16_t status;
 
     NvmeZone *zone;
@@ -864,7 +877,12 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
     if(req->is_write)
     {
         //printf("zns_nvme_rw write\n");
+        // FILE *f = fopen("boundry_debug.txt","a");
+        // fprintf(f,"【zns_nvme_rw write】\n");
         zone = zns_get_zone_by_slba(ns, slba);
+        //fprintf(f,"Req.%lu, zone_slba:%lu, zone_end:%lu,zone->w_ptr:%lu, req_slba:%lu, req_nlb:%u\n",count, zone->d.zslba,zone->d.zslba + zone->d.zcap,zone->w_ptr,slba,nlb);
+        //fclose(f);
+        count++;
         status = zns_check_zone_write(n, ns, zone, slba, nlb, append);
         if (status) {
             femu_err("Misao check zone write failed with status (%u)\n",status);
@@ -902,6 +920,9 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
             zns_check_dulbe(ns, slba, nlb); if (status) { goto err; } } }
 
     data_offset = zns_l2b(ns, slba);
+    #ifdef NO_FUNC
+    data_offset2 = zns_l2b(ns, slba);
+    #endif
     status = zns_map_dptr(n, data_size, req);
     if (status) {
         goto err;
@@ -911,8 +932,26 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
     req->status = NVME_SUCCESS;
     req->nlb = nlb;
     
-    #ifdef COMPRESS
+    #ifdef COMPQAT
     if(((rw->opcode == NVME_CMD_WRITE) || (rw->opcode == NVME_CMD_ZONE_APPEND))){
+         #ifdef NO_FUNC
+        int sg_cur_index = 0;
+        //dma_addr_t sg_cur_byte = 0;
+        uint64_t mb_oft_2 = (&data_offset2)[0];
+        //void *mb_2 = n->mbe->logical_space;
+        //void *mb = g_malloc(4096); //这个空间大小需要根据实际情况调整
+        req->compressed_size = g_malloc(sizeof(uint32_t) * req->qsg.nsg);
+
+        while (sg_cur_index < req->qsg.nsg){  
+            uint32_t ol = req->qsg.sg[sg_cur_index].len;  
+            //qat_dc_compress(n,0,mb_2+mb_oft_2,req->qsg.sg[sg_cur_index].len, &ol,1);
+            (req->compressed_size)[sg_cur_index] = ol;
+            ++sg_cur_index;
+            mb_oft_2 += req->qsg.sg[sg_cur_index].len;
+        }
+        //g_free(mb);
+        backend_rw(n->mbe, &req->qsg, &data_offset, req->is_write);
+        #else
         //added by wpy
         //printf("qat compress test\n");
         //qat_init(n);
@@ -923,11 +962,10 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
         /*原始数据，用于压缩*/        
         uint64_t mb_oft_2 = (&data_offset)[0];
         void *mb_2 = n->mbe->logical_space;
-        
-        #ifndef FINE_TUNE_COMP
+
         /*压缩后数据*/
-        void *mb = g_malloc(4096); //这个空间大小需要根据实际情况调整
-        #endif
+        //void *mb = g_malloc(4096); //这个空间大小需要根据实际情况调整
+        
 
         DMADirection dir = DMA_DIRECTION_TO_DEVICE;
 
@@ -935,20 +973,20 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
         // CpaDcDpOpData **opData = n->dc_op_datas;
         //printf("req->qsg.nsg : %d\n",req->qsg.nsg);
         while (sg_cur_index < req->qsg.nsg){
-            uint32_t outputlen = req->qsg.sg[sg_cur_index].len;
+            uint32_t outputlenqat = req->qsg.sg[sg_cur_index].len;
 
-            qat_dc_compress(n,0,mb_2+mb_oft_2,(req->qsg.sg[sg_cur_index].len - sg_cur_byte),mb, &outputlen,1);
+            //qat_dc_compress(n,0,mb_2+mb_oft_2,(req->qsg.sg[sg_cur_index].len - sg_cur_byte),mb, &outputlenqat,1);
             //printf("sg_cur_index : %d, outputlen : %d\n",sg_cur_index,outputlen);
 
-            req->qsg.sg[sg_cur_index].len = outputlen;
-            req->qsg.size = outputlen;
+            //req->qsg.sg[sg_cur_index].len = outputlenqat;
+            //req->qsg.size = outputlenqat;
 
-            (req->compressed_size)[sg_cur_index] = outputlen;
+            (req->compressed_size)[sg_cur_index] = outputlenqat;
 
             cur_addr = req->qsg.sg[sg_cur_index].base + sg_cur_byte;
             cur_len = req->qsg.sg[sg_cur_index].len - sg_cur_byte;
 
-            if (dma_memory_rw(req->qsg.as, cur_addr, mb, cur_len, dir, MEMTXATTRS_UNSPECIFIED)) {
+            if (dma_memory_rw(req->qsg.as, cur_addr, mb_2, outputlenqat, dir, MEMTXATTRS_UNSPECIFIED)) {
                 femu_err("dma_memory_rw error\n");
             }
             
@@ -961,9 +999,10 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
             
             
         }
-        
+        //free(mb);
         //qat_exit(n);
         qemu_sglist_destroy(&req->qsg);
+        #endif
     }
     else{
         //FILE *f = fopen("sysread.txt","a");
@@ -982,6 +1021,9 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
     }
 
     n->zns->active_zone = zns_zone_idx(ns,slba);
+    // FILE *f = fopen("boundry_debug.txt","a");
+    // fprintf(f,"active zone:%u\n",n->zns->active_zone);
+    // fclose(f);
     return NVME_SUCCESS;
 err:
     return status | NVME_DNR;
@@ -1348,7 +1390,14 @@ static void zns_init_params(FemuCtrl *n)
         id_zns->cache.write_cache[i].sblk = i;
         id_zns->cache.write_cache[i].used = 0;
         id_zns->cache.write_cache[i].cap = (id_zns->stripe_uint/LOGICAL_PAGE_SIZE);
+        #ifdef COMP_META
+        id_zns->cache.write_cache[i].lpns = g_malloc0(sizeof(struct lpn_with_comp_meta) * id_zns->cache.write_cache[i].cap);
+        #else
         id_zns->cache.write_cache[i].lpns = g_malloc0(sizeof(uint64_t) * id_zns->cache.write_cache[i].cap);
+        #endif
+        // #ifdef COMP_META
+        // id_zns->cache.write_cache[i].compsize = g_malloc0(sizeof(uint64_t) * id_zns->cache.write_cache[i].cap);
+        // #endif
     }
 
     //added by zwl oob
@@ -1433,7 +1482,7 @@ static int zns_start_ctrl(FemuCtrl *n)
 static void zns_init(FemuCtrl *n, Error **errp)
 {
     NvmeNamespace *ns = &n->namespaces[0];
-#ifdef COMPRESS
+#ifdef COMPQAT
     qat_init(n);
 #endif
     global_ns = &n->namespaces[0];
@@ -1460,8 +1509,8 @@ static void zns_exit(FemuCtrl *n)
     /*
      * Release any extra resource (zones) allocated for ZNS mode
      */
-    #ifdef COMPRESS
-    qat_exit(n);
+    #ifdef COMPQAT
+    //qat_exit(n);
     #endif
 }
 

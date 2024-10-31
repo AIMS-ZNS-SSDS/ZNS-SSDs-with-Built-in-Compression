@@ -989,7 +989,7 @@ typedef struct NvmeRequest {
     int64_t                 gcrt;
     int64_t                 expire_time;
 
-    #ifdef COMPRESS
+    #ifdef COMPQAT
     uint32_t *compressed_size;
     #endif
     /* OC2.0: sector offset relative to slba where reads become invalid */

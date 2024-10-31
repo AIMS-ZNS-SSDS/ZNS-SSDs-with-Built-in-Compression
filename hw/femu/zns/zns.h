@@ -140,6 +140,7 @@ struct zns_write_cache{
     //bool previous_residue;
 #else
     uint64_t* lpns; //identify the cached data
+    //uint64_t* compsize; //identify the cached data's compressed size
 #endif
 };
 

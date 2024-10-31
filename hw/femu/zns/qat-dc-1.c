@@ -317,11 +317,11 @@ void qat_exit(FemuCtrl *n)
 
 //------------------------------------------------------------------------------
 
-CpaStatus qat_dc_compress(FemuCtrl *n, uint32_t inst_idx, void *input, uint32_t input_len, void *output, uint32_t *output_len, uint32_t count)
+CpaStatus qat_dc_compress(FemuCtrl *n, uint32_t inst_idx, void *input, uint32_t input_len, uint32_t *output_len, uint32_t count)
 {
     CpaInstanceHandle *dcInstHandles = n->dc_inst_handles;
     Cpa8U **pSrcBuffers = n->dc_src_buffers;
-    Cpa8U **pDstBuffers = n->dc_dst_buffers;
+    //Cpa8U **pDstBuffers = n->dc_dst_buffers;
     CpaDcDpOpData **pOpDatas = n->dc_op_datas;
     uint32_t *dc_inflight_ops = n->dc_inflight_ops;
     CpaStatus status = CPA_STATUS_SUCCESS;
@@ -370,7 +370,7 @@ CpaStatus qat_dc_compress(FemuCtrl *n, uint32_t inst_idx, void *input, uint32_t 
             for (uint32_t i = 0; i < batch_sz; i++)
             { 
                 qatomic_set(output_len + i, pOpDatas[inst_idx * QAT_OP_PER_INST + i]->results.produced);
-                memcpy(output, pDstBuffers[inst_idx], *output_len);
+                //memcpy(output, pDstBuffers[inst_idx], *output_len);
             }
             output_len += batch_sz;
         }

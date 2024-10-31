@@ -20,6 +20,10 @@
         "msix.h": "c",
         "pci.h": "c",
         "stdio.h": "c",
-        "timing.h": "c"
+        "timing.h": "c",
+        "array": "c",
+        "string_view": "c",
+        "initializer_list": "c",
+        "utility": "c"
     }
 }

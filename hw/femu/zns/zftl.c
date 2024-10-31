@@ -203,13 +203,13 @@ static int zns_get_wcidx(struct zns_ssd* zns)
 /*Write a single out-of-bound (OOB) area entry*/
 static int zns_write_oob_meta(struct zns_ssd* zns, struct ppa ppa, void *meta)
 {   
+    assert(ppa.ppa != UNMAPPED_PPA);
     uint64_t absolute_page_number = (ppa.g.ch * zns->num_lun * zns->num_plane * zns->num_blk * zns->num_page) +
                            (ppa.g.fc * zns->num_plane * zns->num_blk * zns->num_page) +
                            (ppa.g.pl * zns->num_blk * zns->num_page) +
                            (ppa.g.blk * zns->num_page) + ppa.g.pg;
     uint64_t oft = absolute_page_number * zns->meta_len + zns->int_meta_size;
     uint8_t *tgt_sos_meta_buf = &zns->meta_buf[oft];
-
     assert(oft + zns->sos < zns->meta_total_bytes);
     if(oft + zns->sos < zns->meta_total_bytes) memcpy(tgt_sos_meta_buf, meta, zns->sos);
 
@@ -335,6 +335,7 @@ static inline struct ppa get_right_ppa_from_oob(FemuCtrl *n, NvmeCmd cmd, uint64
         free(meta);
         return ppa_from_li;
     }
+    free(meta);
 }   
 #endif
 
@@ -417,7 +418,7 @@ static uint64_t read_with_ppn(FemuCtrl *n, NvmeCmd cmd, NvmeRequest *req){
         } else { //不跨页读
             lpn = end_lpn+1;
         }
-        
+        free(meta);
         //if not optimized, then sublat = sublat1 + sublat2;
         sublat = (sublat1 > sublat2) ? sublat1 : sublat2;
         maxlat = (sublat > maxlat) ? sublat : maxlat;
@@ -540,15 +541,11 @@ static uint64_t zns_wc_flush(struct zns_ssd* zns, int wcidx, int type,uint64_t s
     int flash_type = zns->flash_type;
     uint64_t sublat = 0, maxlat = 0;
 
-#ifdef COMP_META
-    FILE *file = fopen("zns_wc_flush.txt", "a");
-#endif
+// #ifdef COMP_META
+//     FILE *file = fopen("write_oob_debug.txt", "a");
+// #endif
     i = 0;
     #ifdef COMP_META
-    //uint16_t residue_size_temp = residue_size;
-    
-    //uint64_t first_lpn_of_next_ppn = 0;
-
     //LPN到PPN的映射
     //FIXME: ONLY support  ZNS_PAGE_SIZE/LOGICAL_PAGE_SIZE = 1
     while (i < zns->cache.write_cache[wcidx].used)
@@ -557,15 +554,12 @@ static uint64_t zns_wc_flush(struct zns_ssd* zns, int wcidx, int type,uint64_t s
             /* new write */           
             ppa = get_new_page(zns);
             if(theloop){
-                if(j_value != 0) ppa.g.V = 0;
                 p = p_value;
             }
             ppa.g.pl = p;
             for(j = 0; j < flash_type ;j++)
             {
                 ppa.g.pg = get_blk(zns,&ppa)->page_wp;
-                //printf("ppa.g.pg:%d\n",ppa.g.pg);
-                //fprintf(file, "j_value:%d\n",j_value);
 itr:       
                 if(theloop){
                     if(shouldplus){
@@ -576,8 +570,6 @@ itr:
                     }
                     theloop = false;
                 }
-
-                //get_blk(zns,&ppa)->page_wp++;
                 for(subpage = 0;subpage < ZNS_PAGE_SIZE/LOGICAL_PAGE_SIZE;subpage++)
                 {
                     if(i+subpage >= zns->cache.write_cache[wcidx].used)
@@ -585,7 +577,9 @@ itr:
                         //No need to write an invalid page
                         break;
                     }
+                    
                     lpn = zns->cache.write_cache[wcidx].lpns[i+subpage].lpn;
+                
                     oldppa = get_maptbl_ent(zns, lpn);
                     if (mapped_ppa(&oldppa)) {
                         /* FIXME: Misao: update old page information*/
@@ -595,8 +589,7 @@ itr:
                     set_maptbl_ent(zns, lpn, &ppa);
                     //femu_log("[F] lpn:\t%lu\t-->ch:\t%u\tlun:\t%u\tpl:\t%u\tblk:\t%u\tpg:\t%u\tsubpg:\t%u\tlat\t%lu\n",lpn,ppa.g.ch,ppa.g.fc,ppa.g.pl,ppa.g.blk,ppa.g.pg,ppa.g.spg,sublat);
                 }
-                //fprintf(file, "zns->cache.write_cache[wcidx].used:%lu , i:%d\n", zns->cache.write_cache[wcidx].used, i);          
-                //fprintf(file,"lpn:%lu, compressed_size:%u, accumulated_size_1:%u, residue_size:%u\n", zns->cache.write_cache[wcidx].lpns[i].lpn, zns->cache.write_cache[wcidx].lpns[i].compressed_size, accumulated_size_1, residue_size);
+                
                 if((residue_size + accumulated_size_1 + zns->cache.write_cache[wcidx].lpns[i].compressed_size) < ZNS_PAGE_SIZE){
                     accumulated_size_1 += zns->cache.write_cache[wcidx].lpns[i].compressed_size;
                     i++;
@@ -609,11 +602,10 @@ itr:
                         char *meta = malloc(zns->meta_len - zns->int_meta_size);
                         memcpy(meta, &first_lpn, 4);
                         memcpy(meta+4, &residue_size, 2);
-                        //residue_size = zns->cache.write_cache[wcidx].lpns[i].compressed_size - (ZNS_PAGE_SIZE - accumulated_size_1 - residue_size);
 
                         uint16_t reverse_mapping = ((first_lpn - first_lpn_of_last_ppn) & 0xFF) << 8;
                         memcpy(meta+6, &reverse_mapping, 2);
-                        zns_write_oob_meta(zns, get_maptbl_ent(zns, first_lpn), meta);
+                        zns_write_oob_meta(zns, ppa, meta);
 
                         break;
                     }
@@ -626,11 +618,11 @@ itr:
                     memcpy(meta+4, &residue_size, 2);
                     //fprintf(file, "residue_size: %u, First lpn: %lu, first_lpn_of_last_ppn:%lu\n", residue_size, first_lpn, first_lpn_of_last_ppn);
                     residue_size = zns->cache.write_cache[wcidx].lpns[i].compressed_size - (ZNS_PAGE_SIZE - accumulated_size_1 - residue_size);
-
                     uint16_t reverse_mapping = (((first_lpn - first_lpn_of_last_ppn) & 0xFF) << 8) | ((zns->cache.write_cache[wcidx].lpns[i].lpn+1 - first_lpn) & 0xFF);
+                    
                     memcpy(meta+6, &reverse_mapping, 2);
- 
-                    zns_write_oob_meta(zns, get_maptbl_ent(zns, first_lpn), meta);
+                    //fprintf(file,"lpn:\t%lu\t-->ch:\t%u\tlun:\t%u\tpl:\t%u\tblk:\t%u\tpg:\t%u\n",lpn,ppa.g.ch,ppa.g.fc,ppa.g.pl,ppa.g.blk,ppa.g.pg);
+                    zns_write_oob_meta(zns, ppa, meta);
 
                     free(meta);
 
@@ -638,11 +630,11 @@ itr:
                     accumulated_size_1 = 0;
                     
                     first_lpn_of_last_ppn = first_lpn;
+
                     first_lpn = zns->cache.write_cache[wcidx].lpns[i].lpn+1;
                     
                     i++;
 
-                    //fprintf(file, "First lpn: %lu, first_lpn_of_last_ppn:%lu\n", first_lpn, first_lpn_of_last_ppn);
                     if(j == flash_type-1){
                         //fprintf(file, "j == flash_type-1\n");
                         theloop = false;
@@ -666,8 +658,6 @@ itr:
                         }
                     }
                 }
-                //i+=ZNS_PAGE_SIZE/LOGICAL_PAGE_SIZE;
-                
             }
             //FIXME Misao: identify padding page
             if(!theloop)
@@ -675,11 +665,10 @@ itr:
                 struct nand_cmd swr;
                 swr.type = type;
                 swr.cmd = NAND_WRITE;
-                swr.stime = 0;
+                swr.stime = stime;
                 /* get latency statistics */
                 sublat = zns_advance_status(zns, &ppa, &swr);
                 maxlat = (sublat > maxlat) ? sublat : maxlat;
-                fprintf(file, "sublat: %lu, maxlat: %lu\n", sublat, maxlat);
             }
 
             if(i >= zns->cache.write_cache[wcidx].used)
@@ -690,40 +679,39 @@ itr:
         }
         //added by zwl
             // advance write pointer here to prioritize channel and chip level parallelism
-
             if(!theloop) zns_advance_write_pointer(zns);
 
     }
     
     //check the correctness of reverse mapping
-    for(int temp = 0; temp < zns->cache.write_cache[wcidx].used; temp++){
-        uint64_t lpn_t = zns->cache.write_cache[wcidx].lpns[temp].lpn;
-        if(zns->maptbl[lpn_t].ppa != UNMAPPED_PPA){
-            fprintf(file, "lpn: %ld, ppa: Ch[%d] FC[%d] Pln[%d] Blk[%d] PPN[%d]\n", lpn_t, zns->maptbl[lpn_t].g.ch, zns->maptbl[lpn_t].g.fc, zns->maptbl[lpn_t].g.pl, zns->maptbl[lpn_t].g.blk,zns->maptbl[lpn_t].g.pg);
-            char *meta = malloc(zns->meta_len - zns->int_meta_size);
-            zns_read_oob_meta(zns, zns->maptbl[lpn_t], meta);
+    // for(int temp = 0; temp < zns->cache.write_cache[wcidx].used; temp++){
+    //     uint64_t lpn_t = zns->cache.write_cache[wcidx].lpns[temp].lpn;
+    //     if(zns->maptbl[lpn_t].ppa != UNMAPPED_PPA){
+    //         fprintf(file, "lpn: %ld, ppa: Ch[%d] FC[%d] Pln[%d] Blk[%d] PPN[%d]\n", lpn_t, zns->maptbl[lpn_t].g.ch, zns->maptbl[lpn_t].g.fc, zns->maptbl[lpn_t].g.pl, zns->maptbl[lpn_t].g.blk,zns->maptbl[lpn_t].g.pg);
+    //         char *meta = malloc(zns->meta_len - zns->int_meta_size);
+    //         zns_read_oob_meta(zns, zns->maptbl[lpn_t], meta);
 
-            // 提取前 4 byte (uint32_t)
-            uint32_t first_4_bytes;
-            memcpy(&first_4_bytes, meta, 4);
+    //         // 提取前 4 byte (uint32_t)
+    //         uint32_t first_4_bytes;
+    //         memcpy(&first_4_bytes, meta, 4);
 
-            // 提取随后的 2 byte (uint16_t)
-            uint16_t next_2_bytes;
-            memcpy(&next_2_bytes, meta + 4, 2);
+    //         // 提取随后的 2 byte (uint16_t)
+    //         uint16_t next_2_bytes;
+    //         memcpy(&next_2_bytes, meta + 4, 2);
 
-            // 提取随后的 1 byte (uint8_t)
-            uint16_t next_1_byte;
-            memcpy(&next_1_byte, meta + 6, 2);
-            fprintf(file,"SOS Data: First lpn: %u, residue size: %u,", first_4_bytes, next_2_bytes);
-            fprintf(file, "reverse mapping: former %u, latter %u\n", (next_1_byte & 0xFF00) >> 8, next_1_byte & 0xFF);
-            //for (int x = next_1_byte - 1; x >= 0; x--) {
-             //   printf("%c", (next_1_byte & (1ULL << x)) ? '1' : '0');
-            //}
-            //printf("\n");
-            free(meta);
-        }
-    }
-    fclose(file);
+    //         // 提取随后的 1 byte (uint8_t)
+    //         uint16_t next_1_byte;
+    //         memcpy(&next_1_byte, meta + 6, 2);
+    //         fprintf(file,"SOS Data: First lpn: %u, residue size: %u,", first_4_bytes, next_2_bytes);
+    //         fprintf(file, "reverse mapping: former %u, latter %u\n", (next_1_byte & 0xFF00) >> 8, next_1_byte & 0xFF);
+    //         //for (int x = next_1_byte - 1; x >= 0; x--) {
+    //          //   printf("%c", (next_1_byte & (1ULL << x)) ? '1' : '0');
+    //         //}
+    //         //printf("\n");
+    //         free(meta);
+    //     }
+    // }
+    //fclose(file);
      #else
 
     while(i < zns->cache.write_cache[wcidx].used)
@@ -778,7 +766,7 @@ itr:
     return maxlat;
 }
 
-static uint64_t zns_write(struct zns_ssd *zns, NvmeRequest *req)
+static uint64_t zns_write(FemuCtrl *n, struct zns_ssd *zns, NvmeRequest *req)
 {
     uint64_t lba = req->slba;
     uint32_t nlb = req->nlb;
@@ -816,34 +804,27 @@ static uint64_t zns_write(struct zns_ssd *zns, NvmeRequest *req)
     for (lpn = start_lpn; lpn <= end_lpn; lpn++) {
         if(zns->cache.write_cache[wcidx].used==zns->cache.write_cache[wcidx].cap)
         {
-            //("[W] flush wc %d (%u/%u)\n",wcidx,(int)zns->cache.write_cache[wcidx].used,(int)zns->cache.write_cache[wcidx].cap);
             sublat = zns_wc_flush(zns,wcidx,USER_IO,req->stime);
-            //femu_log("[W] flush lat: %u\n", (int)sublat);
             maxlat = (sublat > maxlat) ? sublat : maxlat;
             sublat = 0;
         }
-        //added by zwl oob
-        //updating the written lpn and its compressed size that will be written to physical pages
         #ifdef COMP_META
         zns->cache.write_cache[wcidx].lpns[zns->cache.write_cache[wcidx].used].lpn = lpn;
-        #ifdef COMPRESS
-        zns->cache.write_cache[wcidx].lpns[zns->cache.write_cache[wcidx].used].compressed_size = req->compressed_size[lpn-start_lpn];
-        #else
-        zns->cache.write_cache[wcidx].lpns[zns->cache.write_cache[wcidx].used].compressed_size = ZNS_PAGE_SIZE;
-        #endif
-        //FILE *file = fopen("zns_wc_flush.txt", "a");
-        //fprintf(file,"lpn:%lu, index:%lu comrpessed in write cache:%u\n",lpn, lpn-start_lpn, zns->cache.write_cache[wcidx].lpns[zns->cache.write_cache[wcidx].used].compressed_size);
-        //fclose(file);
-       // zns->cache.write_cache[wcidx].lpns[zns->cache.write_cache[wcidx].used].compressed_size = ZNS_PAGE_SIZE;
+        //zns->cache.write_cache[wcidx].lpns[zns->cache.write_cache[wcidx].used].compressed_size = req->compressed_size[lpn-start_lpn];
+        zns->cache.write_cache[wcidx].lpns[zns->cache.write_cache[wcidx].used].compressed_size = 35;
         zns->cache.write_cache[wcidx].used++;
         #else
         zns->cache.write_cache[wcidx].lpns[zns->cache.write_cache[wcidx].used++]=lpn;
         #endif
-        //sublat += SRAM_WRITE_LATENCY_NS * zns->cache.write_cache[wcidx].lpns[zns->cache.write_cache[wcidx].used].compressed_size/ZNS_PAGE_SIZE; //Simplified timing emulation
-        sublat += SRAM_WRITE_LATENCY_NS;
+        sublat += SRAM_WRITE_LATENCY_NS * zns->cache.write_cache[wcidx].lpns[zns->cache.write_cache[wcidx].used].compressed_size/ZNS_PAGE_SIZE; //Simplified timing emulation
+        //sublat += SRAM_WRITE_LATENCY_NS;
         maxlat = (sublat > maxlat) ? sublat : maxlat;
         //femu_log("[W] lpn:\t%lu\t-->wc cache:%u, used:%u\n",lpn,(int)wcidx,(int)zns->cache.write_cache[wcidx].used);
     }
+    #ifdef COMP_META
+    free(req->compressed_size);
+    #endif
+    //fclose(f);
     return maxlat;
 }
 
@@ -946,7 +927,7 @@ static void *ftl_thread(void *arg)
             ftl_assert(req);
             switch (req->cmd.opcode) {
             case NVME_CMD_WRITE:
-                lat = zns_write(zns, req);
+                lat = zns_write(n, zns, req);
                 break;
             case NVME_CMD_READ:
             #ifdef READ_1
