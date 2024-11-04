@@ -24,6 +24,15 @@
         "array": "c",
         "string_view": "c",
         "initializer_list": "c",
-        "utility": "c"
+        "utility": "c",
+        "*.def": "c",
+        "chrono": "c",
+        "algorithm": "c",
+        "istream": "c",
+        "limits": "c",
+        "streambuf": "c",
+        "bit": "c",
+        "unordered_map": "c",
+        "unordered_set": "c"
     }
 }

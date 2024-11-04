@@ -5,7 +5,7 @@
 #define NVME_DEFAULT_ZONE_SIZE      (128 * MiB)
 #define NVME_DEFAULT_MAX_AZ_SIZE    (128 * KiB)
 NvmeNamespace *global_ns = NULL;
-uint64_t count = 0;
+
 static inline uint32_t zns_zone_idx(NvmeNamespace *ns, uint64_t slba)
 {
     FemuCtrl *n = ns->ctrl;
@@ -876,13 +876,7 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
 
     if(req->is_write)
     {
-        //printf("zns_nvme_rw write\n");
-        // FILE *f = fopen("boundry_debug.txt","a");
-        // fprintf(f,"【zns_nvme_rw write】\n");
         zone = zns_get_zone_by_slba(ns, slba);
-        //fprintf(f,"Req.%lu, zone_slba:%lu, zone_end:%lu,zone->w_ptr:%lu, req_slba:%lu, req_nlb:%u\n",count, zone->d.zslba,zone->d.zslba + zone->d.zcap,zone->w_ptr,slba,nlb);
-        //fclose(f);
-        count++;
         status = zns_check_zone_write(n, ns, zone, slba, nlb, append);
         if (status) {
             femu_err("Misao check zone write failed with status (%u)\n",status);
@@ -935,22 +929,15 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
     #ifdef COMPQAT
     if(((rw->opcode == NVME_CMD_WRITE) || (rw->opcode == NVME_CMD_ZONE_APPEND))){
          #ifdef NO_FUNC
-        int sg_cur_index = 0;
+        //int sg_cur_index = 0;
         //dma_addr_t sg_cur_byte = 0;
         uint64_t mb_oft_2 = (&data_offset2)[0];
-        //void *mb_2 = n->mbe->logical_space;
-        //void *mb = g_malloc(4096); //这个空间大小需要根据实际情况调整
+        void *mb_2 = n->mbe->logical_space;
         req->compressed_size = g_malloc(sizeof(uint32_t) * req->qsg.nsg);
-
-        while (sg_cur_index < req->qsg.nsg){  
-            uint32_t ol = req->qsg.sg[sg_cur_index].len;  
-            //qat_dc_compress(n,0,mb_2+mb_oft_2,req->qsg.sg[sg_cur_index].len, &ol,1);
-            (req->compressed_size)[sg_cur_index] = ol;
-            ++sg_cur_index;
-            mb_oft_2 += req->qsg.sg[sg_cur_index].len;
-        }
-        //g_free(mb);
+     
+        qat_dc_compress(n,0,mb_2+mb_oft_2,req->qsg.sg[0].len, req->compressed_size,req->qsg.nsg);
         backend_rw(n->mbe, &req->qsg, &data_offset, req->is_write);
+
         #else
         //added by wpy
         //printf("qat compress test\n");

@@ -350,15 +350,6 @@ static uint64_t read_with_ppn(FemuCtrl *n, NvmeCmd cmd, NvmeRequest *req){
     uint64_t secs_per_pg = LOGICAL_PAGE_SIZE/n->zns->lbasz;
     uint64_t start_lpn = lba / secs_per_pg;
     uint64_t end_lpn = (lba + nlb - 1) / secs_per_pg;
-    //uint64_t n_lpn = end_lpn - start_lpn + 1;
-    //int number_ppn_to_read = 1;
-   //DMADirection dir = DMA_DIRECTION_FROM_DEVICE;
-    //for normal read
-    // uint64_t data_offset2 = zns_l2b(global_ns,lba);
-    // uint64_t mb_of = (&data_offset2)[0];
-    // int sg_cur_index = 0;
-    // dma_addr_t sg_cur_byte = 0;
-    // dma_addr_t cur_addr, cur_len;
 
     for(uint64_t lpn = start_lpn; lpn <= end_lpn;){
         uint64_t gap =0;
@@ -422,76 +413,6 @@ static uint64_t read_with_ppn(FemuCtrl *n, NvmeCmd cmd, NvmeRequest *req){
         //if not optimized, then sublat = sublat1 + sublat2;
         sublat = (sublat1 > sublat2) ? sublat1 : sublat2;
         maxlat = (sublat > maxlat) ? sublat : maxlat;
-
-        // uint64_t data_offset = ((ppa.g.ch * n->zns->num_lun * n->zns->num_plane * n->zns->num_blk * n->zns->num_page) +
-        //                 (ppa.g.fc * n->zns->num_plane * n->zns->num_blk * n->zns->num_page) +
-        //                 (ppa.g.pl * n->zns->num_blk * n->zns->num_page) +
-        //                 (ppa.g.blk * n->zns->num_page) + ppa.g.pg) * ZNS_PAGE_SIZE + residue;
-        // void *mb_2 = n->mbe->logical_space;
-        // void *mb = g_malloc(ZNS_PAGE_SIZE); //这个空间大小需要根据实际情况调整
-        // uint32_t outputlen = 0;
-        // uint64_t off = (&data_offset)[0];
-
-        // //for normal read
-        // if (!mapped_ppa(&ppa) || !valid_ppa(n->zns, &ppa)) {
-        //     //femu_log("ppa not mapped, skip\n");
-        //     cur_addr = req->qsg.sg[sg_cur_index].base + sg_cur_byte;
-        //     cur_len = req->qsg.sg[sg_cur_index].len - sg_cur_byte;
-        //     if (dma_memory_rw((&req->qsg)->as, cur_addr, mb_2 + mb_of, cur_len, dir, MEMTXATTRS_UNSPECIFIED)) {
-        //         femu_err("dma_memory_rw error\n");
-        //     }
-        //     sg_cur_byte += cur_len;
-        //     if (sg_cur_byte == (&req->qsg)->sg[sg_cur_index].len) {
-        //         sg_cur_byte = 0;
-        //         ++sg_cur_index;
-        //     }
-
-            
-        //     mb_of += cur_len;
-            
-        //     continue;
-        // }
-
-        //todo:先要从backend读取数据 再传给decompress
-        //FIXME*: only support sg_cur_byte == (&req->qsg)->sg[sg_cur_index].len
-        // if(dma_memory_rw((&req->qsg)->as,(&req->qsg)->sg[sg_cur_index].base, mb_2+off, ZNS_PAGE_SIZE - residue, dir, MEMTXATTRS_UNSPECIFIED)){
-        //     femu_err("dma_memory_rw error\n");
-        // }
-        // //refer to nvme_addr_read
-        // qat_dc_decompress(n,0, mb_2+off, ZNS_PAGE_SIZE - residue, mb, &outputlen, 1, ZNS_PAGE_SIZE, gap);
-
-    //     struct nand_cmd srd;
-    //     srd.type = USER_IO;
-    //     srd.cmd = NAND_READ;
-    //     srd.stime = req->stime;
-
-    //     sublat = zns_advance_status(n->zns, &ppa, &srd);
-
-    //     if(outputlen < ZNS_PAGE_SIZE){
-    //         //cross physical page
-    //         void *newmb = malloc(ZNS_PAGE_SIZE-outputlen);
-    //         uint32_t newoutputlen = 0;
-    //         uint64_t lpn_t = lpn + 1;
-    //         struct ppa nextppa = get_maptbl_ent(n->zns, lpn_t);
-    //         void *meta = malloc(n->zns->meta_len - n->zns->int_meta_size);
-    //         zns_read_oob_meta(n->zns, nextppa, meta);
-    //         memcpy(&residue, meta+4, 2);
-    //         data_offset = ((nextppa.g.ch * n->zns->num_lun * n->zns->num_plane * n->zns->num_blk * n->zns->num_page) +
-    //                     (nextppa.g.fc * n->zns->num_plane * n->zns->num_blk * n->zns->num_page) +
-    //                     (nextppa.g.pl * n->zns->num_blk * n->zns->num_page) +
-    //                     (nextppa.g.blk * n->zns->num_page) + nextppa.g.pg) * ZNS_PAGE_SIZE;
-    //         qat_dc_decompress(n,0,mb_2+off,residue, newmb, &newoutputlen, 1, ZNS_PAGE_SIZE-outputlen, 0);
-    //         if(newoutputlen != ZNS_PAGE_SIZE-outputlen){
-    //             fprintf(stdout, "newoutputlen != ZNS_PAGE_SIZE-outputlen \n");
-    //         }
-    //         memcpy(mb+outputlen, newmb, ZNS_PAGE_SIZE-outputlen);
-    //         //memmove(n->mbe->logical_space + (&lba)[0], mb, nlb);
-    //         srd.stime = req->stime + sublat;
-    //         sublat += zns_advance_status(n->zns, &ppa, &srd);
-    //     }
-    
-    //     maxlat = (sublat > maxlat) ? sublat : maxlat;
-    //     sg_cur_index++;
 
      }
      return maxlat;
@@ -810,8 +731,8 @@ static uint64_t zns_write(FemuCtrl *n, struct zns_ssd *zns, NvmeRequest *req)
         }
         #ifdef COMP_META
         zns->cache.write_cache[wcidx].lpns[zns->cache.write_cache[wcidx].used].lpn = lpn;
-        //zns->cache.write_cache[wcidx].lpns[zns->cache.write_cache[wcidx].used].compressed_size = req->compressed_size[lpn-start_lpn];
-        zns->cache.write_cache[wcidx].lpns[zns->cache.write_cache[wcidx].used].compressed_size = 35;
+        zns->cache.write_cache[wcidx].lpns[zns->cache.write_cache[wcidx].used].compressed_size = req->compressed_size[lpn-start_lpn];
+        //zns->cache.write_cache[wcidx].lpns[zns->cache.write_cache[wcidx].used].compressed_size = 35;
         zns->cache.write_cache[wcidx].used++;
         #else
         zns->cache.write_cache[wcidx].lpns[zns->cache.write_cache[wcidx].used++]=lpn;
@@ -828,75 +749,7 @@ static uint64_t zns_write(FemuCtrl *n, struct zns_ssd *zns, NvmeRequest *req)
     return maxlat;
 }
 
-// #ifdef READ_1
-// static void *ftl_thread(void *arg, void* arg2)
-// {
-//     FemuCtrl *n = (FemuCtrl *)arg;
-//     NvmeNamespace *ns = (NvmeNamespace *)arg2;
-//     struct zns_ssd *zns = n->zns;
-//     NvmeRequest *req = NULL;
-//     uint64_t lat = 0;
-//     int rc;
-//     int i;
 
-//     while (!*(zns->dataplane_started_ptr)) {
-//         usleep(100000);
-//     }
-
-//     /* FIXME: not safe, to handle ->to_ftl and ->to_poller gracefully */
-//     zns->to_ftl = n->to_ftl;
-//     zns->to_poller = n->to_poller;
-
-//     while (1) {
-//         for (i = 1; i <= n->nr_pollers; i++) {
-//             if (!zns->to_ftl[i] || !femu_ring_count(zns->to_ftl[i]))
-//                 continue;
-
-//             rc = femu_ring_dequeue(zns->to_ftl[i], (void *)&req, 1);
-//             if (rc != 1) {
-//                 printf("FEMU: FTL to_ftl dequeue failed\n");
-//             }
-
-//             ftl_assert(req);
-//             uint64_t start_lpn = (req->slba / (LOGICAL_PAGE_SIZE/n->zns->lbasz));
-//             switch (req->cmd.opcode) {
-//             case NVME_CMD_WRITE:
-//                 lat = zns_write(zns, req);
-//                 break;
-//             case NVME_CMD_READ:
-//             #ifdef READ_1
-//                 if(start_lpn >= n->zns->l2p_sz){
-//                     lat = zns_read(zns, req);
-//                 } else {
-//                     lat = read_with_ppn(n, ns, req->cmd, req);
-//                 }
-                
-//             #else
-//                 lat = zns_read(zns, req);
-//             #endif
-//                 break;
-//             case NVME_CMD_DSM:
-//                 lat = 0;
-//                 break;
-//             default:
-//                 //ftl_err("FTL received unkown request type, ERROR\n");
-//                 ;
-//             }
-
-//             req->reqlat = lat;
-//             req->expire_time += lat;
-
-//             rc = femu_ring_enqueue(zns->to_poller[i], (void *)&req, 1);
-//             if (rc != 1) {
-//                 ftl_err("FTL to_poller enqueue failed\n");
-//             }
-
-//         }
-//     }
-
-//     return NULL;
-// }
-// #else
 static void *ftl_thread(void *arg)
 {
     FemuCtrl *n = (FemuCtrl *)arg;
