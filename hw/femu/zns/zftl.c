@@ -83,9 +83,11 @@ static inline void check_addr(int a, int max)
 static void zns_advance_write_pointer(struct zns_ssd *zns)
 {
     struct write_pointer *wpp = &zns->wp;
-
+    FILE *f=fopen("write_oob_debug.txt","a");
     check_addr(wpp->ch, zns->num_ch);
     wpp->ch++;
+    fprintf(f,"Advance pointer, cur wp_ch %lu num_ch %lu\n",wpp->ch,zns->num_ch);
+    //fclose(f);
     if (wpp->ch == zns->num_ch) {
         wpp->ch = 0;
         check_addr(wpp->lun, zns->num_lun);
@@ -95,6 +97,8 @@ static void zns_advance_write_pointer(struct zns_ssd *zns)
             wpp->lun = 0;
         }
     }
+    fprintf(f,"After advance, wp_ch %lu num_ch %lu\n",wpp->ch,zns->num_ch);
+    fclose(f);
 }
 
 static uint64_t zns_advance_status(struct zns_ssd *zns, struct ppa *ppa,struct nand_cmd *ncmd)
@@ -249,11 +253,17 @@ static inline uint64_t random_uint64(uint64_t min, uint64_t max) {
 
 static inline uint64_t random_adjust_lpn(uint64_t lpn, uint64_t low_n, uint64_t high_n, uint32_t first_4_bytes) {
     // 计算增加和减少的范围
-    uint64_t increase_min = low_n + first_4_bytes - lpn - 1;
-    uint64_t increase_max = low_n;
+    uint64_t increase_min = 0;
+    uint64_t increase_max = 0;
+    if(low_n != 0 && low_n > (first_4_bytes - lpn - 1)){
+        increase_min = low_n + first_4_bytes - lpn - 1;
+        increase_max = low_n;
+    }
     uint64_t decrease_min = lpn - first_4_bytes;
     uint64_t decrease_max = high_n;
-
+    FILE *f = fopen("readdebug.txt", "a");
+    fprintf(f,"increase_min:%lu increase_max:%lu decrease_min:%lu decrease_max:%lu\n",increase_min,increase_max,decrease_min,decrease_max);
+    fclose(f);
     // 检查范围是否合法
     if (increase_min > increase_max || decrease_min > decrease_max) {
         fprintf(stderr, "Invalid ranges for LPN adjustment!\n");
@@ -278,7 +288,7 @@ static inline uint64_t random_adjust_lpn(uint64_t lpn, uint64_t low_n, uint64_t 
 
 /*interface for getting ppn from learned index, modify the paramters as you need*/
 static inline struct ppa get_right_ppa_from_oob(FemuCtrl *n, NvmeCmd cmd, uint64_t lpn, uint64_t *gap, uint16_t *residue){
-    //FILE *f = fopen("readdebug.txt", "a");
+    FILE *f = fopen("readdebug.txt", "a");
     struct ppa ppa_from_li = get_maptbl_ent(n->zns, lpn);
     //fprintf(f,"lpn:%lu ppn:%lu \n", lpn, ppa_from_li.ppa);
     if(ppa_from_li.ppa == UNMAPPED_PPA) return ppa_from_li;
@@ -288,29 +298,35 @@ static inline struct ppa get_right_ppa_from_oob(FemuCtrl *n, NvmeCmd cmd, uint64
     zns_read_oob_meta(n->zns, ppa_from_li, meta);
     // 提取前 4 byte (uint32_t)
     uint32_t first_4_bytes;
-    uint8_t reverse_mapping;
+    uint16_t reverse_mapping;
     memcpy(&first_4_bytes, meta, 4);
-    memcpy(&reverse_mapping, meta + 6, 1);
-    uint8_t high_n = (reverse_mapping >> 4) & 0x0F;
-    uint8_t low_n =  reverse_mapping & 0x0F;
-
+    memcpy(&reverse_mapping, meta + 6, 2);
+    uint8_t high_n = (reverse_mapping >> 8) & 0xFF;
+    uint8_t low_n =  reverse_mapping & 0xFF;
+    fprintf(f,"True first_4_bytes:%u high_n:%u low_n:%u\n",first_4_bytes,high_n,low_n);
+    fclose(f);
     //模拟得到错误的ppn
     //std::memset(meta, 0, n->zns->sos);
     uint64_t fake_lpn = random_adjust_lpn(lpn, low_n, high_n, first_4_bytes);
+    f = fopen("readdebug.txt", "a");
+    fprintf(f,"fake_lpn:%lu\n",fake_lpn);
+
     //uint64_t fake_lpn = lpn;
     ppa_from_li = get_maptbl_ent(n->zns, fake_lpn);
+    if(ppa_from_li.ppa == UNMAPPED_PPA) return ppa_from_li;
     zns_read_oob_meta(n->zns, ppa_from_li, meta);
     // 提取前 4 byte (uint32_t)
     memcpy(&first_4_bytes, meta, 4);
-    memcpy(&reverse_mapping, meta + 6, 1);
-    high_n = (reverse_mapping >> 4) & 0x0F;
-    low_n =  reverse_mapping & 0x0F;
-
-    if(first_4_bytes >= lpn || lpn < first_4_bytes + low_n){
+    memcpy(&reverse_mapping, meta + 6, 2);
+    high_n = (reverse_mapping >> 8) & 0xFF;
+    low_n =  reverse_mapping & 0xFF;
+    fprintf(f,"Wrong first_4_bytes:%u high_n:%u low_n:%u\n",first_4_bytes,high_n,low_n);
+    if((first_4_bytes <= lpn && low_n!=0 && lpn < first_4_bytes + low_n) || (first_4_bytes <= lpn && low_n == 0)){
         // 说明这个ppa是正确的
         memcpy(residue, meta + 4, 2); 
         *gap = lpn - first_4_bytes;
-        //printf("lpn: %lu, first_4_bytes: %u, high_n: %u, low_n: %u, gap: %lu\n", lpn, first_4_bytes, high_n, low_n, *gap);
+        fprintf(f,"true\n");
+        fclose(f);
         free(meta);
         return ppa_from_li;
     } else if(lpn<first_4_bytes && lpn >= first_4_bytes - high_n){
@@ -319,23 +335,30 @@ static inline struct ppa get_right_ppa_from_oob(FemuCtrl *n, NvmeCmd cmd, uint64
         memmove(&first_4_bytes, meta, 4);
         *gap = lpn - first_4_bytes;
         memcpy(residue, meta + 4, 2);
+        fprintf(f,"previous\n");
+        fclose(f);
         free(meta);
         return ppa;
-    } else if(lpn>first_4_bytes && lpn >=first_4_bytes + low_n){
+    } else if(lpn >=first_4_bytes + low_n){
         struct ppa ppa = get_maptbl_ent(n->zns, (uint64_t)(first_4_bytes + low_n));
         zns_read_oob_meta(n->zns, ppa, meta);
         memmove(&first_4_bytes, meta, 4);
         *gap = lpn - first_4_bytes;
         memcpy(residue, meta + 4, 2);
+        fprintf(f,"next\n");
+        fclose(f);
         free(meta);
         return ppa;
     } else {
         ppa_from_li.ppa = UNMAPPED_PPA;
+        fprintf(f,"ERROR!\n");
+        fclose(f);
         femu_err("get ppn error!\n");
         free(meta);
         return ppa_from_li;
     }
-    free(meta);
+    
+    //free(meta);
 }   
 #endif
 
@@ -350,13 +373,19 @@ static uint64_t read_with_ppn(FemuCtrl *n, NvmeCmd cmd, NvmeRequest *req){
     uint64_t secs_per_pg = LOGICAL_PAGE_SIZE/n->zns->lbasz;
     uint64_t start_lpn = lba / secs_per_pg;
     uint64_t end_lpn = (lba + nlb - 1) / secs_per_pg;
-
+    
     for(uint64_t lpn = start_lpn; lpn <= end_lpn;){
+        FILE * f = fopen("readdebug.txt", "a");
+        fprintf(f,"lpn:%lu\n",lpn);
+        fclose(f);
         uint64_t gap =0;
         uint16_t residue = 0;
         struct ppa ppa = get_right_ppa_from_oob(n, cmd, lpn, &gap, &residue);
         if (!mapped_ppa(&ppa) || !valid_ppa(n->zns, &ppa)) {
             //femu_log("ppa not mapped, skip\n");
+            f = fopen("readdebug.txt", "a");
+            fprintf(f,"ppa not mapped, skip\n");
+            fclose(f);
             lpn++;
             continue;
         
@@ -366,11 +395,13 @@ static uint64_t read_with_ppn(FemuCtrl *n, NvmeCmd cmd, NvmeRequest *req){
         zns_read_oob_meta(n->zns, ppa, meta);
         // 提取前 4 byte (uint32_t)
         uint32_t first_4_bytes;
-        uint8_t reverse_mapping;
+        uint16_t reverse_mapping;
         memcpy(&first_4_bytes, meta, 4);
-        memcpy(&reverse_mapping, meta + 6, 1);
-        uint8_t low_n =  reverse_mapping & 0x0F;
-
+        memcpy(&reverse_mapping, meta + 6, 2);
+        uint8_t low_n =  reverse_mapping & 0xFF;
+        f = fopen("readdebug.txt", "a");
+        fprintf(f,"True first_4_bytes:%u high_n:%u low_n:%u\n",first_4_bytes,(reverse_mapping >> 8) & 0xFF, low_n);
+        fclose(f);
         struct nand_cmd srd;
         srd.type = USER_IO;
         srd.cmd = NAND_READ;
@@ -384,8 +415,8 @@ static uint64_t read_with_ppn(FemuCtrl *n, NvmeCmd cmd, NvmeRequest *req){
             uint16_t residue2 = 0;
             memcpy(&residue2,meta+4,2);
             memcpy(&first_4_bytes, meta, 4);
-            memcpy(&reverse_mapping, meta + 6, 1);
-            low_n =  reverse_mapping & 0x0F;
+            memcpy(&reverse_mapping, meta + 6, 2);
+            low_n =  reverse_mapping & 0xFF;
 
             if(residue2 != 0){
                 // two pages read
@@ -398,8 +429,8 @@ static uint64_t read_with_ppn(FemuCtrl *n, NvmeCmd cmd, NvmeRequest *req){
             char *meta2 = malloc(n->zns->sos);
             zns_read_oob_meta(n->zns, ppa_next, meta2);
             memcpy(&first_4_bytes, meta, 4);
-            memcpy(&reverse_mapping, meta + 6, 1);
-            low_n =  reverse_mapping & 0x0F;
+            memcpy(&reverse_mapping, meta + 6, 2);
+            low_n =  reverse_mapping & 0xFF;
             sublat2 = zns_advance_status(n->zns, &ppa_next, &srd);
             if(low_n >end_lpn){
                 lpn = end_lpn+1;
@@ -463,26 +494,42 @@ static uint64_t zns_wc_flush(struct zns_ssd* zns, int wcidx, int type,uint64_t s
     uint64_t sublat = 0, maxlat = 0;
 
 // #ifdef COMP_META
-//     FILE *file = fopen("write_oob_debug.txt", "a");
+    //FILE *file = fopen("write_oob_debug.txt", "a");
 // #endif
     i = 0;
     #ifdef COMP_META
     //LPN到PPN的映射
     //FIXME: ONLY support  ZNS_PAGE_SIZE/LOGICAL_PAGE_SIZE = 1
     while (i < zns->cache.write_cache[wcidx].used)
-    {
+    {   
+        FILE *file = fopen("write_oob_debug.txt", "a");
+        fprintf(file, "-----------------------i:%d\n", i);
         for(p = 0;p<zns->num_plane;p++){
             /* new write */           
             ppa = get_new_page(zns);
+            // ppa.ppa = 0;
+            // ppa.g.ch = zns->wp.ch;
+            // ppa.g.fc = zns->wp.lun;
+            // ppa.g.blk = zns->active_zone;
+            // ppa.g.V = 1;
+            // if(!valid_ppa(zns,&ppa))
+            // {
+            //     ftl_err("[Misao] invalid ppa: ch %u lun %u pl %u blk %u pg %u subpg  %u \n",ppa.g.ch,ppa.g.fc,ppa.g.pl,ppa.g.blk,ppa.g.pg,ppa.g.spg);
+            //     ppa.ppa = UNMAPPED_PPA;
+            // }
+
             if(theloop){
                 p = p_value;
             }
+            fprintf(file, "\nch:%lu, lun:%lu, blk:%u, p_idx: %d\n", zns->wp.ch, zns->wp.lun, zns->active_zone, p);
             ppa.g.pl = p;
+            fprintf(file, "get PPA ch:%u, lun:%u, p_idx:%u, blk:%u,\n", ppa.g.ch, ppa.g.fc, ppa.g.pl, ppa.g.blk);
             for(j = 0; j < flash_type ;j++)
             {
                 ppa.g.pg = get_blk(zns,&ppa)->page_wp;
-itr:       
+                fprintf(file, "\npg:%d   ", ppa.g.pg);
                 if(theloop){
+                    fprintf(file, "shouldplus:%d j:%d, j_value:%d\n", shouldplus, j, j_value);
                     if(shouldplus){
                         j = j_value + 1;
                         shouldplus = false;
@@ -491,6 +538,10 @@ itr:
                     }
                     theloop = false;
                 }
+
+                fprintf(file, "j:%d   \n", j);
+                fprintf(file, "lpn: \n");
+itr:            
                 for(subpage = 0;subpage < ZNS_PAGE_SIZE/LOGICAL_PAGE_SIZE;subpage++)
                 {
                     if(i+subpage >= zns->cache.write_cache[wcidx].used)
@@ -500,7 +551,7 @@ itr:
                     }
                     
                     lpn = zns->cache.write_cache[wcidx].lpns[i+subpage].lpn;
-                
+                    fprintf(file, "%lu, ", lpn);
                     oldppa = get_maptbl_ent(zns, lpn);
                     if (mapped_ppa(&oldppa)) {
                         /* FIXME: Misao: update old page information*/
@@ -514,7 +565,8 @@ itr:
                 if((residue_size + accumulated_size_1 + zns->cache.write_cache[wcidx].lpns[i].compressed_size) < ZNS_PAGE_SIZE){
                     accumulated_size_1 += zns->cache.write_cache[wcidx].lpns[i].compressed_size;
                     i++;
-                    if(i >= zns->cache.write_cache[wcidx].used){                    
+                    if(i >= zns->cache.write_cache[wcidx].used){
+                        fprintf(file, "\nDidn't full fill a physical page!\n");                    
                         theloop = true;
                         shouldplus = false;
                         j_value = j;
@@ -562,7 +614,6 @@ itr:
                         shouldplus = false;
                         j_value = 0;
                         p_value = 0;
-                        break;
                     }
                     if(i >= zns->cache.write_cache[wcidx].used){
                         if(j == flash_type-1){
@@ -573,8 +624,11 @@ itr:
                             p_value = 0;
                             break;
                         } else {
+                            fprintf(file, "\nFull fill a physical page but not flash type\n");
                             theloop = true;
                             shouldplus = true;
+                            j_value = j;
+                            p_value = p;
                             break;
                         }
                     }
@@ -598,6 +652,7 @@ itr:
                 }
                 
         }
+        fclose(file);
         //added by zwl
             // advance write pointer here to prioritize channel and chip level parallelism
             if(!theloop) zns_advance_write_pointer(zns);

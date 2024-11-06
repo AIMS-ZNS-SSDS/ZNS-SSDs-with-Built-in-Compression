@@ -6,7 +6,7 @@
 #define BLK_BITS    (32)
 #define PL_BITS     (1)
 #define FC_BITS     (2)
-#define CH_BITS     (1)
+#define CH_BITS     (3)
 
 #include "../nvme.h"
 #include "zftl.h"
@@ -75,7 +75,7 @@ struct ppa {
         uint64_t pl   : PL_BITS;
 	    uint64_t ch   : CH_BITS;
         uint64_t V    : 1; //padding page or not
-        uint64_t rsv  : 8;
+        uint64_t rsv  : 6;
         } g;
 
 	uint64_t ppa;
