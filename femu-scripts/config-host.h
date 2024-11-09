@@ -369,7 +369,7 @@
 
 #undef CONFIG_USB_LIBUSB
 
-#undef CONFIG_VALGRIND_H
+#define CONFIG_VALGRIND_H
 
 #define CONFIG_VALLOC
 
