@@ -316,17 +316,18 @@ void qat_exit(FemuCtrl *n)
 
 //------------------------------------------------------------------------------
 
-CpaStatus qat_dc_compress(FemuCtrl *n, uint32_t inst_idx, void *input, uint32_t input_len, void *output, uint32_t *output_len, uint32_t count)
+CpaStatus qat_dc_compress(FemuCtrl *n, uint32_t inst_idx, void *input, uint32_t input_len, uint32_t *output_len, uint32_t count)
 {
+    printf("qat_dc_compress\n");
     CpaInstanceHandle *dcInstHandles = n->dc_inst_handles;
     Cpa8U **pSrcBuffers = n->dc_src_buffers;
-    Cpa8U **pDstBuffers = n->dc_dst_buffers;
+    //Cpa8U **pDstBuffers = n->dc_dst_buffers;
     CpaDcDpOpData **pOpDatas = n->dc_op_datas;
     uint32_t *dc_inflight_ops = n->dc_inflight_ops;
-    CpaStatus status = CPA_STATUS_FAIL;
+    CpaStatus status = CPA_STATUS_SUCCESS;
     uint32_t left = count;
     uint32_t batch_sz = 0;
-    fprintf(stdout,"outputlen_original: %d\n",*output_len);
+
     while (left)
     {
         batch_sz = left;
@@ -336,8 +337,7 @@ CpaStatus qat_dc_compress(FemuCtrl *n, uint32_t inst_idx, void *input, uint32_t 
         {
             // 拷贝数据到压缩缓冲区
             memcpy(pSrcBuffers[inst_idx * QAT_OP_PER_INST + i], input, input_len);
-            fprintf(stdout,"input addres: %p\n",(void *)input);
-            fprintf(stdout,"input content: %s\n",(char *)input);
+
             pOpDatas[inst_idx * QAT_OP_PER_INST + i]->bufferLenToCompress = input_len;
             pOpDatas[inst_idx * QAT_OP_PER_INST + i]->sessDirection = CPA_DC_DIR_COMPRESS;
             pOpDatas[inst_idx * QAT_OP_PER_INST + i]->srcBufferLen = input_len;
@@ -360,7 +360,6 @@ CpaStatus qat_dc_compress(FemuCtrl *n, uint32_t inst_idx, void *input, uint32_t 
             // 等待压缩操作完成
             do
             {
-                fprintf(stdout,"status: %u\n", status);
                 status = icp_sal_DcPollDpInstance(dcInstHandles[inst_idx], 0);
             } while (((CPA_STATUS_SUCCESS == status) || (CPA_STATUS_RETRY == status)) &&
                         (qatomic_read(dc_inflight_ops + inst_idx) != 0));
@@ -369,11 +368,14 @@ CpaStatus qat_dc_compress(FemuCtrl *n, uint32_t inst_idx, void *input, uint32_t 
         {
             // 处理压缩操作结果
             for (uint32_t i = 0; i < batch_sz; i++)
-            {
+            { 
+                if(pOpDatas[inst_idx * QAT_OP_PER_INST + i]->results.produced > input_len){
+                    qatomic_set(output_len + i, 4096);
+                } else {
+                    qatomic_set(output_len + i, pOpDatas[inst_idx * QAT_OP_PER_INST + i]->results.produced);
+                }
                 
-                qatomic_set(output_len + i, pOpDatas[inst_idx * QAT_OP_PER_INST + i]->results.produced);
-                memcpy(output, pDstBuffers[inst_idx * QAT_OP_PER_INST + i], *output_len);
-                fprintf(stdout,"output_len:%u, output address:%p output content:%s\n",*output_len, (void *)output, (char *)output);
+                //memcpy(output, pDstBuffers[inst_idx], *output_len);
             }
             output_len += batch_sz;
         }
@@ -382,7 +384,6 @@ CpaStatus qat_dc_compress(FemuCtrl *n, uint32_t inst_idx, void *input, uint32_t 
     }
     return status;
 }
-
 // CpaStatus qat_dc_compress(FemuCtrl *n, unit32_t inst_idx, void *input, uint32_t input_len, uint32_t *output_len){
 //     CpaInstanceHandle *dcInstHandles = n->dc_inst_handles;
 // }

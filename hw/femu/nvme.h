@@ -20,6 +20,7 @@
 #include "hw/femu/zns/qat/cpa.h"
 #include "hw/femu/zns/qat/cpa_dc_dp.h"
 #include "hw/femu/zns/qat/cpa_dc.h"
+#include "hw/femu/zns/mode-selection.h"
 
 #define NVME_ID_NS_LBADS(ns)                                                  \
     ((ns)->id_ns.lbaf[NVME_ID_NS_FLBAS_INDEX((ns)->id_ns.flbas)].lbads)
@@ -988,6 +989,9 @@ typedef struct NvmeRequest {
     int64_t                 gcrt;
     int64_t                 expire_time;
 
+    #ifdef COMPQAT
+    uint32_t *compressed_size;
+    #endif
     /* OC2.0: sector offset relative to slba where reads become invalid */
     uint64_t predef;
 
