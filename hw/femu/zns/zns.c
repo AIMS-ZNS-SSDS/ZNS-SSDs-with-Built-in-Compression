@@ -57,18 +57,23 @@ static int zns_init_zone_geometry(NvmeNamespace *ns, Error **errp)
     }
 
     n->zone_size = zone_size / lbasz;
+    #ifdef COMP_META
+    n->zns->zone_size = n->zone_size;
+    #endif
     n->zone_capacity = zone_cap / lbasz;
     n->num_zones = ns->size / lbasz / n->zone_size;
 
     if (n->max_open_zones > n->num_zones) {
-        femu_err("max_open_zones value %u exceeds the number of zones %u",
-                 n->max_open_zones, n->num_zones);
-        return -1;
+        n->max_open_zones = n->num_zones;
+        // femu_err("max_open_zones value %u exceeds the number of zones %u",
+        //          n->max_open_zones, n->num_zones);
+        // return -1;
     }
     if (n->max_active_zones > n->num_zones) {
-        femu_err("max_active_zones value %u exceeds the number of zones %u",
-                 n->max_active_zones, n->num_zones);
-        return -1;
+        n->max_active_zones = n->num_zones;
+        // femu_err("max_active_zones value %u exceeds the number of zones %u",
+        //          n->max_active_zones, n->num_zones);
+        // return -1;
     }
 
     if (n->zd_extension_size) {
@@ -1348,7 +1353,8 @@ static void zns_init_params(FemuCtrl *n)
     id_zns->num_lun = n->zns_params.zns_num_lun;
     id_zns->num_plane = n->zns_params.zns_num_plane;
     id_zns->num_blk = n->zns_params.zns_num_blk;
-    id_zns->num_page = n->ns_size/ZNS_PAGE_SIZE/(id_zns->num_ch*id_zns->num_lun*id_zns->num_blk);
+    //id_zns->num_page = n->ns_size/ZNS_PAGE_SIZE/(id_zns->num_ch*id_zns->num_lun*id_zns->num_blk);
+    id_zns->num_page = 4096;
     id_zns->lbasz = 1 << zns_ns_lbads(&n->namespaces[0]);
     id_zns->flash_type = n->zns_params.zns_flash_type;
 
@@ -1441,8 +1447,8 @@ static int zns_init_zone_cap(FemuCtrl *n)
     n->zone_size_bs = zns->num_ch*zns->num_lun*zns->num_plane*zns->num_page*ZNS_PAGE_SIZE;
     n->zone_cap_bs = 0;
     n->cross_zone_read = false;
-    n->max_active_zones = 0;
-    n->max_open_zones = 0;
+    n->max_active_zones = 16;
+    n->max_open_zones = 16;
     n->zd_extension_size = 0;
 
     return 0;

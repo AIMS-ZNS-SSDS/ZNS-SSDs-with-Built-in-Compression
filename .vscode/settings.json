@@ -33,6 +33,21 @@
         "streambuf": "c",
         "bit": "c",
         "unordered_map": "c",
-        "unordered_set": "c"
+        "unordered_set": "c",
+        "atomic": "c",
+        "*.tcc": "c",
+        "deque": "c",
+        "list": "c",
+        "string": "c",
+        "vector": "c",
+        "memory_resource": "c",
+        "memory": "c",
+        "random": "c",
+        "fstream": "c",
+        "sstream": "c",
+        "stdexcept": "c",
+        "tuple": "c",
+        "type_traits": "c",
+        "new": "c"
     }
 }

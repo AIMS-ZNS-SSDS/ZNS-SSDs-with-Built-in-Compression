@@ -155,7 +155,9 @@ struct zns_ssd {
     uint64_t num_plane;
     uint64_t num_blk;
     uint64_t num_page;
-
+    #ifdef COMP_META
+    uint64_t zone_size; //number of lba
+    #endif
     struct zns_ch *ch;
     struct write_pointer wp;
 
