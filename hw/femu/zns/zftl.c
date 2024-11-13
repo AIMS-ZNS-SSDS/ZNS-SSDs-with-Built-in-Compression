@@ -21,6 +21,7 @@ int j_value[] = {0,0,0};
 int p_value[] = {0,0,0};
 bool theloop[] = {false,false,false};
 bool shouldplus[] = {false,false,false};
+size_t data_position = 0;  // 记录文件中读取到的位置
 #endif
 
 static inline struct ppa get_maptbl_ent(struct zns_ssd *zns, uint64_t lpn)
@@ -294,9 +295,9 @@ static inline uint64_t random_adjust_lpn(uint64_t lpn, uint64_t low_n, uint64_t 
 
 /*interface for getting ppn from learned index, modify the paramters as you need*/
 static inline struct ppa get_right_ppa_from_oob(FemuCtrl *n, NvmeCmd cmd, uint64_t lpn, uint64_t *gap, uint16_t *residue, uint64_t stime, uint64_t *ooblat){
-    FILE *f = fopen("readdebug.txt", "a");
+    //FILE *f = fopen("readdebug.txt", "a");
     struct ppa ppa_from_li = get_maptbl_ent(n->zns, lpn);
-    fprintf(f,"lpn:%lu ppn:%lu \n", lpn, ppa_from_li.ppa);
+    //fprintf(f,"lpn:%lu ppn:%lu \n", lpn, ppa_from_li.ppa);
     if(ppa_from_li.ppa == UNMAPPED_PPA) return ppa_from_li;
     /*replace above with real code*/
     //printf("ppa:%lu",ppa_from_li.ppa);
@@ -309,14 +310,14 @@ static inline struct ppa get_right_ppa_from_oob(FemuCtrl *n, NvmeCmd cmd, uint64
     memcpy(&reverse_mapping, meta + 6, 2);
     uint8_t high_n = (reverse_mapping >> 8) & 0xFF;
     uint8_t low_n =  reverse_mapping & 0xFF;
-    fprintf(f,"True first_4_bytes:%u high_n:%u low_n:%u\n",first_4_bytes,high_n,low_n);
-    fclose(f);
+    //fprintf(f,"True first_4_bytes:%u high_n:%u low_n:%u\n",first_4_bytes,high_n,low_n);
+    //fclose(f);
     //模拟得到错误的ppn
     //std::memset(meta, 0, n->zns->sos);
     uint64_t fake_lpn = random_adjust_lpn(lpn, low_n, high_n, first_4_bytes);
-    f = fopen("readdebug.txt", "a");
-    fprintf(f,"fake_lpn:%lu\n",fake_lpn);
-    fclose(f);
+    //f = fopen("readdebug.txt", "a");
+    //fprintf(f,"fake_lpn:%lu\n",fake_lpn);
+    //fclose(f);
     //uint64_t fake_lpn = lpn;
     ppa_from_li = get_maptbl_ent(n->zns, fake_lpn);
     if(ppa_from_li.ppa == UNMAPPED_PPA) return ppa_from_li;
@@ -326,15 +327,15 @@ static inline struct ppa get_right_ppa_from_oob(FemuCtrl *n, NvmeCmd cmd, uint64
     memcpy(&reverse_mapping, meta + 6, 2);
     high_n = (reverse_mapping >> 8) & 0xFF;
     low_n =  reverse_mapping & 0xFF;
-    f = fopen("readdebug.txt", "a");
-    fprintf(f,"Wrong first_4_bytes:%u high_n:%u low_n:%u\n",first_4_bytes,high_n,low_n);
+    //f = fopen("readdebug.txt", "a");
+    //fprintf(f,"Wrong first_4_bytes:%u high_n:%u low_n:%u\n",first_4_bytes,high_n,low_n);
     if((first_4_bytes <= lpn && low_n!=0 && lpn < first_4_bytes + low_n) || (first_4_bytes <= lpn && low_n == 0)){
         *ooblat = 0;
         // 说明这个ppa是正确的
         memcpy(residue, meta + 4, 2); 
         *gap = lpn - first_4_bytes;
-        fprintf(f,"true\n");
-        fclose(f);
+        //fprintf(f,"true\n");
+        //fclose(f);
         free(meta);
         return ppa_from_li;
     } else if(lpn<first_4_bytes && lpn >= first_4_bytes - high_n){
@@ -349,8 +350,8 @@ static inline struct ppa get_right_ppa_from_oob(FemuCtrl *n, NvmeCmd cmd, uint64
         memmove(&first_4_bytes, meta, 4);
         *gap = lpn - first_4_bytes;
         memcpy(residue, meta + 4, 2);
-        fprintf(f,"previous\n");
-        fclose(f);
+        //fprintf(f,"previous\n");
+        //fclose(f);
         free(meta);
         return ppa;
     } else if(lpn >=first_4_bytes + low_n){
@@ -365,15 +366,15 @@ static inline struct ppa get_right_ppa_from_oob(FemuCtrl *n, NvmeCmd cmd, uint64
         memmove(&first_4_bytes, meta, 4);
         *gap = lpn - first_4_bytes;
         memcpy(residue, meta + 4, 2);
-        fprintf(f,"next\n");
-        fclose(f);
+        //fprintf(f,"next\n");
+        //fclose(f);
         free(meta);
         return ppa;
     } else {
         *ooblat = 0;
         ppa_from_li.ppa = UNMAPPED_PPA;
-        fprintf(f,"ERROR!\n");
-        fclose(f);
+        //fprintf(f,"ERROR!\n");
+        //fclose(f);
         femu_err("get ppn error!\n");
         free(meta);
         return ppa_from_li;
@@ -395,21 +396,21 @@ static uint64_t read_with_ppn(FemuCtrl *n, NvmeCmd cmd, NvmeRequest *req){
     uint64_t secs_per_pg = LOGICAL_PAGE_SIZE/n->zns->lbasz;
     uint64_t start_lpn = lba / secs_per_pg;
     uint64_t end_lpn = (lba + nlb - 1) / secs_per_pg;
-    FILE * f = fopen("readdebug.txt", "a");
-    fprintf(f,"start_lpn:%lu end_lpn:%lu\n",start_lpn,end_lpn);
-    fclose(f);
+    //FILE * f = fopen("readdebug.txt", "a");
+    //fprintf(f,"start_lpn:%lu end_lpn:%lu\n",start_lpn,end_lpn);
+    //fclose(f);
     for(uint64_t lpn = start_lpn; lpn <= end_lpn;){
-        f = fopen("readdebug.txt", "a");
-        fprintf(f,"lpn:%lu\n",lpn);
-        fclose(f);
+        //f = fopen("readdebug.txt", "a");
+        //fprintf(f,"lpn:%lu\n",lpn);
+       // fclose(f);
         uint64_t gap =0;
         uint16_t residue = 0;
         struct ppa ppa = get_right_ppa_from_oob(n, cmd, lpn, &gap, &residue, req->stime, &ooblat);
         if (!mapped_ppa(&ppa) || !valid_ppa(n->zns, &ppa)) {
             //femu_log("ppa not mapped, skip\n");
-            f = fopen("readdebug.txt", "a");
-            fprintf(f,"ppa not mapped, skip\n");
-            fclose(f);
+            //f = fopen("readdebug.txt", "a");
+            //fprintf(f,"ppa not mapped, skip\n");
+            //fclose(f);
             lpn++;
             continue;
         
@@ -423,9 +424,9 @@ static uint64_t read_with_ppn(FemuCtrl *n, NvmeCmd cmd, NvmeRequest *req){
         memcpy(&first_4_bytes, meta, 4);
         memcpy(&reverse_mapping, meta + 6, 2);
         uint8_t low_n =  reverse_mapping & 0xFF;
-        f = fopen("readdebug.txt", "a");
-        fprintf(f,"True first_4_bytes:%u high_n:%u low_n:%u\n",first_4_bytes,(reverse_mapping >> 8) & 0xFF, low_n);
-        fclose(f);
+        //f = fopen("readdebug.txt", "a");
+        //fprintf(f,"True first_4_bytes:%u high_n:%u low_n:%u\n",first_4_bytes,(reverse_mapping >> 8) & 0xFF, low_n);
+        //fclose(f);
         struct nand_cmd srd;
         srd.type = USER_IO;
         srd.cmd = NAND_READ;
@@ -433,9 +434,9 @@ static uint64_t read_with_ppn(FemuCtrl *n, NvmeCmd cmd, NvmeRequest *req){
         sublat1 = zns_advance_status(n->zns, &ppa, &srd) + ooblat;
         
         if((first_4_bytes+low_n - 1 == lpn) || (end_lpn-lpn+1) == (first_4_bytes+low_n-lpn)){ //可能跨页读
-            f = fopen("readdebug.txt", "a");
-            fprintf(f,"may cross page\n, skip\n");
-            fclose(f);
+            //f = fopen("readdebug.txt", "a");
+            //fprintf(f,"may cross page\n, skip\n");
+            //fclose(f);
             struct ppa ppa_next = get_maptbl_ent(n->zns, first_4_bytes + low_n);
             char *meta2 = malloc(n->zns->sos);
             zns_read_oob_meta(n->zns, ppa_next, meta2);
@@ -452,9 +453,9 @@ static uint64_t read_with_ppn(FemuCtrl *n, NvmeCmd cmd, NvmeRequest *req){
             }
             lpn += first_4_bytes+low_n-lpn;
         } else if((end_lpn-lpn+1) > (first_4_bytes+low_n-lpn) && low_n!=0){ //必然跨页读
-            f = fopen("readdebug.txt", "a");
-            fprintf(f,"must cross page\n, skip\n");
-            fclose(f);
+            //f = fopen("readdebug.txt", "a");
+            //fprintf(f,"must cross page\n, skip\n");
+            //fclose(f);
             struct ppa ppa_next = get_maptbl_ent(n->zns, first_4_bytes + low_n);
             char *meta2 = malloc(n->zns->sos);
             zns_read_oob_meta(n->zns, ppa_next, meta2);
@@ -468,9 +469,9 @@ static uint64_t read_with_ppn(FemuCtrl *n, NvmeCmd cmd, NvmeRequest *req){
                 lpn += low_n;
             }
         } else { //不跨页读
-            f = fopen("readdebug.txt", "a");
-            fprintf(f,"No cross page\n, skip\n");
-            fclose(f);
+            //f = fopen("readdebug.txt", "a");
+            //fprintf(f,"No cross page\n, skip\n");
+            //fclose(f);
             lpn = end_lpn+1;
         }
         free(meta);
@@ -535,8 +536,8 @@ static uint64_t zns_wc_flush(struct zns_ssd* zns, int wcidx, int type,uint64_t s
     //FIXME: ONLY support  ZNS_PAGE_SIZE/LOGICAL_PAGE_SIZE = 1
     while (i < zns->cache.write_cache[wcidx].used)
     {   
-        FILE *file = fopen("write_oob_debug.txt", "a");
-        fprintf(file, "-----------------------i:%d  wcidx:%d\n", i,wcidx);
+        //FILE *file = fopen("write_oob_debug.txt", "a");
+        //fprintf(file, "-----------------------i:%d  wcidx:%d\n", i,wcidx);
         for(p = 0;p<zns->num_plane;p++){
             /* new write */           
             ppa = get_new_page(zns);
@@ -556,13 +557,13 @@ static uint64_t zns_wc_flush(struct zns_ssd* zns, int wcidx, int type,uint64_t s
             }
             //fprintf(file, "\nch:%lu, lun:%lu, blk:%u, p_idx: %d\n", zns->wp.ch, zns->wp.lun, zns->active_zone, p);
             ppa.g.pl = p;
-            fprintf(file, "get PPA ch:%u, lun:%u, p_idx:%u, blk:%u,\n", ppa.g.ch, ppa.g.fc, ppa.g.pl, ppa.g.blk);
+            //fprintf(file, "get PPA ch:%u, lun:%u, p_idx:%u, blk:%u,\n", ppa.g.ch, ppa.g.fc, ppa.g.pl, ppa.g.blk);
             for(j = 0; j < flash_type ;j++)
             {
                 ppa.g.pg = get_blk(zns,&ppa)->page_wp;
-                fprintf(file, "\npg:%d   ", ppa.g.pg);
+                //fprintf(file, "\npg:%d   ", ppa.g.pg);
                 if(theloop[wcidx]){
-                    fprintf(file, "shouldplus:%d j:%d, j_value:%d\n", shouldplus[wcidx], j, j_value[wcidx]);
+                    //fprintf(file, "shouldplus:%d j:%d, j_value:%d\n", shouldplus[wcidx], j, j_value[wcidx]);
                     if(shouldplus[wcidx]){
                         j = j_value[wcidx] + 1;
                         shouldplus[wcidx] = false;
@@ -572,8 +573,8 @@ static uint64_t zns_wc_flush(struct zns_ssd* zns, int wcidx, int type,uint64_t s
                     theloop[wcidx] = false;
                 }
 
-                fprintf(file, "j:%d   \n", j);
-                fprintf(file, "lpn: \n");
+                //fprintf(file, "j:%d   \n", j);
+                //fprintf(file, "lpn: \n");
 itr:            
                 for(subpage = 0;subpage < ZNS_PAGE_SIZE/LOGICAL_PAGE_SIZE;subpage++)
                 {
@@ -584,7 +585,7 @@ itr:
                     }
                     
                     lpn = zns->cache.write_cache[wcidx].lpns[i+subpage].lpn;
-                    fprintf(file, "%lu, ", lpn);
+                    //fprintf(file, "%lu, ", lpn);
                     oldppa = get_maptbl_ent(zns, lpn);
                     if (mapped_ppa(&oldppa)) {
                         /* FIXME: Misao: update old page information*/
@@ -599,7 +600,7 @@ itr:
                     accumulated_size_1[wcidx] += zns->cache.write_cache[wcidx].lpns[i].compressed_size;
                     i++;
                     if(i >= zns->cache.write_cache[wcidx].used){
-                        fprintf(file, "\nDidn't full fill a physical page!\n");
+                        //fprintf(file, "\nDidn't full fill a physical page!\n");
                                            
                         
                         char *meta = malloc(zns->meta_len - zns->int_meta_size);
@@ -626,12 +627,12 @@ itr:
                     char *meta = malloc(zns->meta_len - zns->int_meta_size);
                     memcpy(meta, &first_lpn[wcidx], 4);
                     memcpy(meta+4, &residue_size[wcidx], 2);
-                    fprintf(file, "residue_size: %u, First lpn: %lu, first_lpn_of_last_ppn:%lu\n", residue_size[wcidx], first_lpn[wcidx], first_lpn_of_last_ppn[wcidx]);
+                    //fprintf(file, "residue_size: %u, First lpn: %lu, first_lpn_of_last_ppn:%lu\n", residue_size[wcidx], first_lpn[wcidx], first_lpn_of_last_ppn[wcidx]);
                     residue_size[wcidx] = zns->cache.write_cache[wcidx].lpns[i].compressed_size - (ZNS_PAGE_SIZE - accumulated_size_1[wcidx] - residue_size[wcidx]);
                     uint16_t reverse_mapping = (((first_lpn[wcidx] - first_lpn_of_last_ppn[wcidx]) & 0xFF) << 8) | ((zns->cache.write_cache[wcidx].lpns[i].lpn+1 - first_lpn[wcidx]) & 0xFF);
                     
                     memcpy(meta+6, &reverse_mapping, 2);
-                    fprintf(file,"lpn:\t%lu\t-->ch:\t%u\tlun:\t%u\tpl:\t%u\tblk:\t%u\tpg:\t%u\n",lpn,ppa.g.ch,ppa.g.fc,ppa.g.pl,ppa.g.blk,ppa.g.pg);
+                    //fprintf(file,"lpn:\t%lu\t-->ch:\t%u\tlun:\t%u\tpl:\t%u\tblk:\t%u\tpg:\t%u\n",lpn,ppa.g.ch,ppa.g.fc,ppa.g.pl,ppa.g.blk,ppa.g.pg);
                     zns_write_oob_meta(zns, ppa, meta);
 
                     free(meta);
@@ -700,7 +701,7 @@ itr:
             first_lpn_of_last_ppn[wcidx] = 0;
             first_lpn[wcidx] = 0;
         } 
-        fclose(file);
+        //fclose(file);
         //added by zwl
             // advance write pointer here to prioritize channel and chip level parallelism
             if(!theloop[wcidx]) zns_advance_write_pointer(zns);
@@ -790,6 +791,47 @@ itr:
     return maxlat;
 }
 
+#ifdef COMPQAT1
+// 读取 CSV 文件并将数据填充到一维数组
+static void fill_array_from_dataset(uint32_t* arr, uint64_t array_size) {
+    FILE *file = fopen("/home/zwl/mail.csv", "r");
+    if (!file) {
+        perror("无法打开文件");
+        exit(EXIT_FAILURE);
+    }
+
+    char* buffer;  // 用于读取每一行的数据
+    buffer = malloc(sizeof(char) * array_size);
+    //size_t current_pos = 0;  // 记录数组当前填充到的位置
+    //size_t data_position = 0;  // 记录文件中读取到的位置
+
+    // 循环填充数组，直到填满为止
+    for (int i = 0; i < array_size; i++) {
+        // 如果到了文件末尾，则重置回文件开头
+        if (fseek(file, data_position, SEEK_SET) != 0) {
+            perror("无法定位文件");
+            exit(EXIT_FAILURE);
+        }
+
+        // 逐行读取文件内容
+        if (fgets(buffer, sizeof(buffer), file)) {
+            int value;
+            if (sscanf(buffer, "%d", &value) == 1) {  // 从每行中提取一个整数
+                arr[i] = value;  // 将读取的整数填充到数组
+                //current_pos++;  // 移动到下一个数组位置
+                data_position = ftell(file);  // 更新文件位置
+            }
+        } else {
+            // 如果读取失败（例如文件结束），则从文件开头重新开始
+            fseek(file, 0, SEEK_SET);
+            data_position = 0;  // 重置数据位置
+        }
+    }
+
+    fclose(file);
+}
+#endif
+
 static uint64_t zns_write(FemuCtrl *n, struct zns_ssd *zns, NvmeRequest *req)
 {
     uint64_t lba = req->slba;
@@ -825,6 +867,13 @@ static uint64_t zns_write(FemuCtrl *n, struct zns_ssd *zns, NvmeRequest *req)
         zns->cache.write_cache[wcidx].sblk = zns->active_zone;
     }
 
+    #ifdef COMPQAT
+    // uint64_t t_pages = end_lpn-start_lpn+1;
+    // uint32_t* cs_2 = NULL;
+    // cs_2 = malloc(t_pages * sizeof(uint32_t));
+    // fill_array_from_dataset(cs_2, t_pages);
+    #endif
+    //FILE *f = fopen("write_oob_debug.txt", "a");
     for (lpn = start_lpn; lpn <= end_lpn; lpn++) {
         if(zns->cache.write_cache[wcidx].used==zns->cache.write_cache[wcidx].cap)
         {
@@ -835,7 +884,9 @@ static uint64_t zns_write(FemuCtrl *n, struct zns_ssd *zns, NvmeRequest *req)
         #ifdef COMP_META
         zns->cache.write_cache[wcidx].lpns[zns->cache.write_cache[wcidx].used].lpn = lpn;
         zns->cache.write_cache[wcidx].lpns[zns->cache.write_cache[wcidx].used].compressed_size = req->compressed_size[lpn-start_lpn];
-        //zns->cache.write_cache[wcidx].lpns[zns->cache.write_cache[wcidx].used].compressed_size = 1892;
+        //zns->cache.write_cache[wcidx].lpns[zns->cache.write_cache[wcidx].used].compressed_size = cs_2[lpn-start_lpn];
+        //fprintf(f, "lpn: %lu, compressed_size: %u\n", lpn, zns->cache.write_cache[wcidx].lpns[zns->cache.write_cache[wcidx].used].compressed_size);
+        
         zns->cache.write_cache[wcidx].used++;
         #else
         zns->cache.write_cache[wcidx].lpns[zns->cache.write_cache[wcidx].used++]=lpn;
