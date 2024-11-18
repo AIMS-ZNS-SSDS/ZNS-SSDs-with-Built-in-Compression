@@ -44,6 +44,9 @@
 #define SRAM_WRITE_LATENCY_NS (1000)
 #define SRAM_READ_LATENCY_NS (1000)
 
+/* added by znbc, here we specify that the size of a sub-superblock is 1/4 of the size of a superblock because num_lun is 4*/
+#define SUPERBLOCK_TO_SUBSUPERBLOCK_RATIO 4
+
 enum {
     NAND_READ =  0,
     NAND_WRITE = 1,
@@ -81,9 +84,17 @@ struct ppa {
     };
 };
 
+/* no use in Balloon-ZNS
 struct write_pointer {
     uint64_t ch;
     uint64_t lun;
+};
+*/
+
+// added by znbc: write pointer for Balloon-ZNS
+struct write_pointer_bz {
+    uint64_t ssblk_idx;
+    uint64_t ch;
 };
 
 struct nand_cmd {
@@ -133,6 +144,16 @@ struct zns_sram{
     struct zns_write_cache* write_cache;
 };
 
+/*added by znbc: sub-superblock. Give up lun level parallelism*/
+struct sub_superblock{
+    bool used;
+    uint32_t to_zone;
+    uint64_t lun;
+    uint64_t blk;
+    uint64_t write_pointer; // record the number of physical pages written
+    bool is_ext;
+};
+
 struct zns_ssd {
     uint64_t num_ch;
     uint64_t num_lun;
@@ -141,7 +162,7 @@ struct zns_ssd {
     uint64_t num_page;
 
     struct zns_ch *ch;
-    struct write_pointer wp;
+    //struct write_pointer wp;
 
     SSDNandFlashTiming timing; /*Misao: accurate  timing emulation for zns ssd.*/
     int flash_type;
@@ -161,6 +182,11 @@ struct zns_ssd {
 
     uint32_t lbasz;
     uint32_t active_zone;
+
+    /* added by znbc: for balloon-zns */
+    struct write_pointer_bz wp_bz;
+    struct sub_superblock * ssblk;
+    uint64_t num_ssblk;
 };
 
 enum NvmeZoneAttr {
@@ -253,6 +279,9 @@ typedef struct NvmeZone {
     NvmeZoneDescr   d;
     uint64_t        w_ptr;
     QTAILQ_ENTRY(NvmeZone) entry;
+    // add by znbc
+    uint64_t * ssblk;   // the idx-array of sub-superblocks mapped by this zone
+    uint64_t num_ssblk; // the number of sub-superblocks mapped by this zone
 } NvmeZone;
 
 typedef struct NvmeNamespaceParams {

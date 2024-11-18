@@ -82,6 +82,20 @@ static int zns_init_zone_geometry(NvmeNamespace *ns, Error **errp)
     return 0;
 }
 
+// added by znbc, get a free sub-superblock
+static uint64_t get_subsuperblock(FemuCtrl *n, uint32_t zone_idx){
+    struct zns_ssd *zns = n->zns;
+    for(int i = 0; i < zns->num_ssblk; i++){
+        if(! zns->ssblk[i].used){
+            zns->ssblk[i].used = 1;
+            zns->ssblk[i].to_zone = zone_idx;
+            return i;
+        }
+    }
+    femu_err("zns.c::get_subsuperblock : Cannot get a free sub-superblock!\n");
+    return -1;
+}
+
 static void zns_init_zoned_state(NvmeNamespace *ns)
 {
     FemuCtrl *n = ns->ctrl;
@@ -113,6 +127,10 @@ static void zns_init_zoned_state(NvmeNamespace *ns)
         zone->d.wp = start;
         zone->w_ptr = start;
         start += zone_size;
+        // added by znbc, init the sub-superblocks mapped by each zone
+        zone->num_ssblk = 1; // give one sub-superblock for each zone at first
+        zone->ssblk = g_malloc(sizeof(u_int64_t) * zone->num_ssblk);
+        zone->ssblk[0] = get_subsuperblock(n, i);
     }
 
     n->zone_size_log2 = 0;
@@ -493,12 +511,18 @@ static inline uint64_t zone_slba(FemuCtrl *n, uint32_t zone_idx)
     return (zone_idx) * n->zone_size;
 }
 
-static uint64_t zns_advance_zone_wp(NvmeNamespace *ns, NvmeZone *zone, uint32_t nlb)
+//static uint64_t zns_advance_zone_wp(NvmeNamespace *ns, NvmeZone *zone, uint32_t nlb)
+static uint64_t zns_advance_zone_wp(NvmeNamespace *ns, NvmeZone *zone, uint32_t nlb, uint64_t slba)
 {
     uint64_t result = zone->w_ptr;
     uint8_t zs;
 
     zone->w_ptr += nlb;
+
+    // add by znbc
+    if(zone->w_ptr >= zone->num_ssblk * ns->ctrl->zone_size / 4){
+        zone->ssblk[zone->num_ssblk++] = get_subsuperblock(ns->ctrl, zns_zone_idx(ns, slba));
+    }
 
     if (zone->w_ptr < zns_zone_wr_boundary(zone)) {
         zs = zns_get_zone_state(zone);
@@ -899,7 +923,7 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
         }
 
         
-        res->slba = zns_advance_zone_wp(ns, zone, nlb);
+        res->slba = zns_advance_zone_wp(ns, zone, nlb, slba);
     }
     else
     {
@@ -933,10 +957,10 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
     req->nlb = nlb;
 
     if(rw->opcode == NVME_CMD_WRITE){
-        printf("nvme write\n");
+        //printf("nvme write\n");
     }
     else if(rw->opcode == NVME_CMD_ZONE_APPEND){
-        printf("nvme zone append\n");
+        //printf("nvme zone append\n");
     }
 
     #ifdef COMPQAT
@@ -949,9 +973,9 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
         req->compressed_size = g_malloc(sizeof(uint32_t) * req->qsg.nsg);
      
         qat_dc_compress(n,0,mb_2+mb_oft_2,req->qsg.sg[0].len, req->compressed_size,req->qsg.nsg);
-        printf("compressed_size : %d\n",req->compressed_size[0]);
+        //printf("compressed_size : %d\n",req->compressed_size[0]);
         backend_rw(n->mbe, &req->qsg, &data_offset, req->is_write);
-        printf("nvme write\n");
+        //printf("nvme write\n");
 
         #else
         //added by wpy
@@ -1408,8 +1432,22 @@ static void zns_init_params(FemuCtrl *n)
         zns_init_ch(&id_zns->ch[i], id_zns->num_lun,id_zns->num_plane,id_zns->num_blk,id_zns->flash_type);
     }
 
-    id_zns->wp.ch = 0;
-    id_zns->wp.lun = 0;
+    //id_zns->wp.ch = 0;
+    //id_zns->wp.lun = 0;
+
+    //added by znbc: init zns for balloon-zns
+    id_zns->wp_bz.ssblk_idx = 0;
+    id_zns->wp_bz.ch = 0;
+    id_zns->ssblk = g_malloc(sizeof(struct sub_superblock) * id_zns->num_blk * SUPERBLOCK_TO_SUBSUPERBLOCK_RATIO);
+    id_zns->num_ssblk = id_zns->num_blk * SUPERBLOCK_TO_SUBSUPERBLOCK_RATIO;
+    for (i = 0; i < id_zns->num_ssblk; i++) {
+        id_zns->ssblk[i].used = 0;
+        id_zns->ssblk[i].to_zone = 0;
+        id_zns->ssblk[i].is_ext = 0;
+        id_zns->ssblk[i].lun = i % SUPERBLOCK_TO_SUBSUPERBLOCK_RATIO;
+        id_zns->ssblk[i].blk = i / SUPERBLOCK_TO_SUBSUPERBLOCK_RATIO;
+        id_zns->ssblk[i].write_pointer = 0;
+    }
 
     //Misao: init mapping table
     id_zns->l2p_sz = n->ns_size/LOGICAL_PAGE_SIZE;

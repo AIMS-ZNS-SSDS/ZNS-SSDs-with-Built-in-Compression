@@ -13,6 +13,7 @@
         "oc12.h": "c",
         "zftl.h": "c",
         "*.tmpl": "c",
-        "*.idef": "c"
+        "*.idef": "c",
+        "*.def": "c"
     }
 }

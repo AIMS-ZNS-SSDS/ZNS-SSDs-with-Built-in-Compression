@@ -51,6 +51,7 @@ static inline void check_addr(int a, int max)
    assert(a >= 0 && a < max);
 }
 
+/* no use in Balloon-ZNS
 static void zns_advance_write_pointer(struct zns_ssd *zns)
 {
     struct write_pointer *wpp = &zns->wp;
@@ -61,10 +62,24 @@ static void zns_advance_write_pointer(struct zns_ssd *zns)
         wpp->ch = 0;
         check_addr(wpp->lun, zns->num_lun);
         wpp->lun++;
-        /* in this case, we should go to next lun */
+        //in this case, we should go to next lun //
         if (wpp->lun == zns->num_lun) {
             wpp->lun = 0;
         }
+    }
+}
+*/
+
+
+// added by znbc
+static void zns_advance_write_pointer_bz(struct zns_ssd *zns)
+{
+    struct write_pointer_bz *wpp = &zns->wp_bz;
+
+    check_addr(wpp->ch, zns->num_ch);
+    wpp->ch++;
+    if (wpp->ch == zns->num_ch) {
+        wpp->ch = 0;
     }
 }
 
@@ -137,6 +152,7 @@ static inline bool mapped_ppa(struct ppa *ppa)
     return !(ppa->ppa == UNMAPPED_PPA);
 }
 
+/*
 static struct ppa get_new_page(struct zns_ssd *zns)
 {
     struct write_pointer *wpp = &zns->wp;
@@ -153,6 +169,34 @@ static struct ppa get_new_page(struct zns_ssd *zns)
     }
     return ppa;
 }
+*/
+
+// add by znbc
+static struct ppa get_new_page_bz(struct zns_ssd *zns)
+{
+    struct write_pointer_bz *wpp = &zns->wp_bz;
+    struct ppa ppa;
+    if(zns->ssblk[wpp->ssblk_idx].write_pointer >= zns->num_ch * zns->num_lun  *zns->num_plane * zns->num_blk * zns->num_page / SUPERBLOCK_TO_SUBSUPERBLOCK_RATIO){
+        wpp->ssblk_idx++;
+        if(wpp->ssblk_idx == SUPERBLOCK_TO_SUBSUPERBLOCK_RATIO){
+            ftl_err("zftl.c::get_new_page_bz: a zone have too many sub-superblocks! Should not happen.\n");
+            wpp->ssblk_idx = 0;
+        }
+    }
+    ppa.ppa = 0;
+    ppa.g.ch = wpp->ch;
+    ppa.g.fc = zns->ssblk[wpp->ssblk_idx].lun;
+    ppa.g.blk = zns->ssblk[wpp->ssblk_idx].blk;
+    ppa.g.V = 1; //not padding page
+    zns->ssblk[wpp->ssblk_idx].write_pointer++;
+    if(!valid_ppa(zns,&ppa))
+    {
+        ftl_err("[Misao] invalid ppa: ch %u lun %u pl %u blk %u pg %u subpg  %u \n",ppa.g.ch,ppa.g.fc,ppa.g.pl,ppa.g.blk,ppa.g.pg,ppa.g.spg);
+        ppa.ppa = UNMAPPED_PPA;
+    }
+    return ppa;
+}
+
 
 static int zns_get_wcidx(struct zns_ssd* zns)
 {
@@ -178,7 +222,7 @@ static uint64_t zns_read(struct zns_ssd *zns, NvmeRequest *req)
     struct ppa ppa;
     uint64_t lpn;
     uint64_t sublat, maxlat = 0;
-
+    
     /* normal IO read path */
     for (lpn = start_lpn; lpn <= end_lpn; lpn++) {
         ppa = get_maptbl_ent(zns, lpn);
@@ -192,7 +236,7 @@ static uint64_t zns_read(struct zns_ssd *zns, NvmeRequest *req)
         srd.stime = req->stime;
 
         sublat = zns_advance_status(zns, &ppa, &srd);
-        femu_log("[R] lpn:\t%lu\t<--ch:\t%u\tlun:\t%u\tpl:\t%u\tblk:\t%u\tpg:\t%u\tsubpg:\t%u\tlat\t%lu\n",lpn,ppa.g.ch,ppa.g.fc,ppa.g.pl,ppa.g.blk,ppa.g.pg,ppa.g.spg,sublat);
+        //femu_log("[R] lpn:\t%lu\t<--ch:\t%u\tlun:\t%u\tpl:\t%u\tblk:\t%u\tpg:\t%u\tsubpg:\t%u\tlat\t%lu\n",lpn,ppa.g.ch,ppa.g.fc,ppa.g.pl,ppa.g.blk,ppa.g.pg,ppa.g.spg,sublat);
         maxlat = (sublat > maxlat) ? sublat : maxlat;
     }
 
@@ -213,7 +257,7 @@ static uint64_t zns_wc_flush(struct zns_ssd* zns, int wcidx, int type,uint64_t s
     {
         for(p = 0;p<zns->num_plane;p++){
             /* new write */
-            ppa = get_new_page(zns);
+            ppa = get_new_page_bz(zns);
             ppa.g.pl = p;
             for(j = 0; j < flash_type ;j++)
             {
@@ -251,7 +295,7 @@ static uint64_t zns_wc_flush(struct zns_ssd* zns, int wcidx, int type,uint64_t s
             }
         }
         /* need to advance the write pointer here */
-        zns_advance_write_pointer(zns);
+        zns_advance_write_pointer_bz(zns);
     }
     zns->cache.write_cache[wcidx].used = 0;
     return maxlat;
@@ -304,7 +348,7 @@ static uint64_t zns_write(struct zns_ssd *zns, NvmeRequest *req)
         zns->cache.write_cache[wcidx].lpns[zns->cache.write_cache[wcidx].used++]=lpn;
         sublat += SRAM_WRITE_LATENCY_NS; //Simplified timing emulation
         maxlat = (sublat > maxlat) ? sublat : maxlat;
-        femu_log("[W] lpn:\t%lu\t-->wc cache:%u, used:%u\n",lpn,(int)wcidx,(int)zns->cache.write_cache[wcidx].used);
+        // femu_log("[W] lpn:\t%lu\t-->wc cache:%u, used:%u\n",lpn,(int)wcidx,(int)zns->cache.write_cache[wcidx].used);
     }
     return maxlat;
 }

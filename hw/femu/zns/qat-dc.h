@@ -26,7 +26,7 @@ CpaStatus qat_dc_compress(FemuCtrl *n, uint32_t inst_idx, void *input, uint32_t 
 CpaStatus qat_dc_decompress(FemuCtrl *n, uint32_t inst_idx, void *input, uint32_t input_len, void *output, uint32_t *output_len, uint32_t count);
 #define QAT_OP_PER_INST (128)
 
-// #define FEMU_DEBUG_QAT
+//#define FEMU_DEBUG_QAT
 #ifdef FEMU_DEBUG_QAT
 #define qat_debug(fmt, ...)                                                                                            \
     do                                                                                                                 \

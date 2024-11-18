@@ -318,7 +318,7 @@ void qat_exit(FemuCtrl *n)
 
 CpaStatus qat_dc_compress(FemuCtrl *n, uint32_t inst_idx, void *input, uint32_t input_len, uint32_t *output_len, uint32_t count)
 {
-    printf("qat_dc_compress\n");
+    //printf("qat_dc_compress\n");
     CpaInstanceHandle *dcInstHandles = n->dc_inst_handles;
     Cpa8U **pSrcBuffers = n->dc_src_buffers;
     //Cpa8U **pDstBuffers = n->dc_dst_buffers;
