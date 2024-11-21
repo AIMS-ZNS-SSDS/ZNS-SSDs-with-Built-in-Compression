@@ -56,6 +56,8 @@ static int zns_init_zone_geometry(NvmeNamespace *ns, Error **errp)
     n->zone_size = zone_size / lbasz;
     n->zone_capacity = zone_cap / lbasz;
     n->num_zones = ns->size / lbasz / n->zone_size;
+    
+    femu_debug("[znbc] zns.c::zns_init_zone_geometry : lbasz=%d n->zone_size_bs=%ld n->zone_size=%ld\n",lbasz, n->zone_size_bs, n->zone_size);
 
     if (n->max_open_zones > n->num_zones) {
         femu_err("max_open_zones value %u exceeds the number of zones %u",
@@ -89,10 +91,17 @@ static uint64_t get_subsuperblock(FemuCtrl *n, uint32_t zone_idx){
         if(! zns->ssblk[i].used){
             zns->ssblk[i].used = 1;
             zns->ssblk[i].to_zone = zone_idx;
+            femu_debug("[znbc] zns.c::get_subsuperblock : give ssblk(%d) to zone(%d).\n", i, zns->ssblk[i].to_zone);
             return i;
         }
     }
-    femu_err("zns.c::get_subsuperblock : Cannot get a free sub-superblock!\n");
+    femu_err("[znbc] zns.c::get_subsuperblock : Cannot get a free sub-superblock for zone(%d)!\n", zone_idx);
+    for(int i = 0; i < zns->num_ssblk; i++){
+        if(zns->ssblk[i].used){
+            femu_debug("%d,", zns->ssblk[i].to_zone);
+        }
+    }
+    femu_debug("\n[znbc]  zns->num_ssblk = %ld\n.", zns->num_ssblk);
     return -1;
 }
 
@@ -128,9 +137,12 @@ static void zns_init_zoned_state(NvmeNamespace *ns)
         zone->w_ptr = start;
         start += zone_size;
         // added by znbc, init the sub-superblocks mapped by each zone
-        zone->num_ssblk = 1; // give one sub-superblock for each zone at first
-        zone->ssblk = g_malloc(sizeof(u_int64_t) * zone->num_ssblk);
-        zone->ssblk[0] = get_subsuperblock(n, i);
+        zone->num_ssblk = 0;
+        zone->ssblk = g_malloc0(sizeof(u_int64_t) * SUPERBLOCK_TO_SUBSUPERBLOCK_RATIO);
+        zone->ssblk_idx = 0;
+        memset(zone->percentile_cnt, 0, sizeof(zone->percentile_cnt));
+        zone->pwd_len = 0;
+        zone->last_slot_size_percentile = INITIAL_SLOT_SIZE_TO_PAGE_SIZE_PERCENTILE;
     }
 
     n->zone_size_log2 = 0;
@@ -186,6 +198,18 @@ static void zns_clear_zone(NvmeNamespace *ns, NvmeZone *zone)
     uint8_t state;
 
     zone->w_ptr = zone->d.wp;
+    // added by znbc
+    struct zns_ssd *zns = n->zns;
+    for(int i = 0; i < zns->num_ssblk; i++){
+        if(zns->ssblk[i].used){
+            zns->ssblk[i].used = 0;
+            zns->ssblk[i].to_zone = 0;
+            zns->ssblk[i].is_ext = 0;
+            femu_debug("[znbc] zns.c::zns_clear_zone : reset ssblk(%d).\n", i);
+        }
+    }
+    zone->num_ssblk = 0;
+    zone->ssblk_idx = 0;
     state = zns_get_zone_state(zone);
     if (zone->d.wp != zone->d.zslba || (zone->d.za & NVME_ZA_ZD_EXT_VALID)) {
         if (state != NVME_ZONE_STATE_CLOSED) {
@@ -520,8 +544,14 @@ static uint64_t zns_advance_zone_wp(NvmeNamespace *ns, NvmeZone *zone, uint32_t 
     zone->w_ptr += nlb;
 
     // add by znbc
-    if(zone->w_ptr >= zone->num_ssblk * ns->ctrl->zone_size / 4){
-        zone->ssblk[zone->num_ssblk++] = get_subsuperblock(ns->ctrl, zns_zone_idx(ns, slba));
+    femu_debug("[znbc] zns.c::zns_advance_zone_wp zone->w_ptr-zone->d.zslba=%ld-%ld=%ld  zone->num_ssblk=%ld ns->ctrl->zone_size=%ld next_limit=%ld\n",zone->w_ptr, zone->d.zslba, zone->w_ptr - zone->d.zslba, zone->num_ssblk, ns->ctrl->zone_size, zone->num_ssblk * ns->ctrl->zone_size / SUPERBLOCK_TO_SUBSUPERBLOCK_RATIO);
+    if(zone->w_ptr - zone->d.zslba > zone->num_ssblk * ns->ctrl->zone_size / SUPERBLOCK_TO_SUBSUPERBLOCK_RATIO){
+        if(zone->num_ssblk < SUPERBLOCK_TO_SUBSUPERBLOCK_RATIO){
+            zone->ssblk[zone->num_ssblk++] = get_subsuperblock(ns->ctrl, zns_zone_idx(ns, slba));
+        }
+        else{
+            femu_debug("[znbc] zns.c::zns_advance_zone_wp : Should not have more sub-superblocks!\n");
+        }
     }
 
     if (zone->w_ptr < zns_zone_wr_boundary(zone)) {
@@ -971,12 +1001,24 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
         uint64_t mb_oft_2 = (&data_offset2)[0];
         void *mb_2 = n->mbe->logical_space;
         req->compressed_size = g_malloc(sizeof(uint32_t) * req->qsg.nsg);
-     
-        qat_dc_compress(n,0,mb_2+mb_oft_2,req->qsg.sg[0].len, req->compressed_size,req->qsg.nsg);
+        u_int64_t len = req->qsg.sg[0].len;
+        int nsg = req->qsg.nsg;
+        femu_debug("[znbc] zns.c::zns_nvme_rw : sg[0].len = %lu nsg = %d, pwd_size = %lu mb_oft=%ld\n", req->qsg.sg[0].len, req->qsg.nsg, n->zns->profiling_window_size, mb_oft_2);
+        //qat_dc_compress(n,0,mb_2+mb_oft_2,req->qsg.sg[0].len, req->compressed_size,req->qsg.nsg);
+    
         //printf("compressed_size : %d\n",req->compressed_size[0]);
         backend_rw(n->mbe, &req->qsg, &data_offset, req->is_write);
         //printf("nvme write\n");
 
+        //qat_dc_compress(n,0,(void *)req->qsg.sg[0].base, req->qsg.sg[0].len, req->compressed_size,req->qsg.nsg);
+        qat_dc_compress(n,0,mb_2+mb_oft_2,len, req->compressed_size, nsg);
+
+        printf("zns.c::zns_nvme_rw : compressed_size: ");
+        for(int j=0;j<nsg;j++){
+            printf("%d, ",req->compressed_size[j]);
+        }
+        printf("\n");
+        
         #else
         //added by wpy
         //printf("qat compress test\n");
@@ -1432,14 +1474,16 @@ static void zns_init_params(FemuCtrl *n)
         zns_init_ch(&id_zns->ch[i], id_zns->num_lun,id_zns->num_plane,id_zns->num_blk,id_zns->flash_type);
     }
 
+    femu_debug("[znbc] zns.c::zns_init_params : num_ch=%ld num_lun=%ld num_plane=%ld num_blk=%ld num_page=%ld, lbasz=%d flash_type=%d\n",\
+    id_zns->num_ch, id_zns->num_lun, id_zns->num_plane, id_zns->num_blk, id_zns->num_page, id_zns->lbasz, id_zns->flash_type); // Can be seen at the top area of build-femu/log.
     //id_zns->wp.ch = 0;
     //id_zns->wp.lun = 0;
 
     //added by znbc: init zns for balloon-zns
-    id_zns->wp_bz.ssblk_idx = 0;
     id_zns->wp_bz.ch = 0;
     id_zns->ssblk = g_malloc(sizeof(struct sub_superblock) * id_zns->num_blk * SUPERBLOCK_TO_SUBSUPERBLOCK_RATIO);
     id_zns->num_ssblk = id_zns->num_blk * SUPERBLOCK_TO_SUBSUPERBLOCK_RATIO;
+    id_zns->ssblk_size_limit = id_zns->num_ch * id_zns->num_lun * id_zns->num_plane * id_zns->num_page / id_zns->flash_type / SUPERBLOCK_TO_SUBSUPERBLOCK_RATIO;
     for (i = 0; i < id_zns->num_ssblk; i++) {
         id_zns->ssblk[i].used = 0;
         id_zns->ssblk[i].to_zone = 0;
@@ -1448,6 +1492,7 @@ static void zns_init_params(FemuCtrl *n)
         id_zns->ssblk[i].blk = i / SUPERBLOCK_TO_SUBSUPERBLOCK_RATIO;
         id_zns->ssblk[i].write_pointer = 0;
     }
+    id_zns->profiling_window_size = id_zns->num_ch * id_zns->num_lun * id_zns->num_plane * id_zns->num_page * ZNS_PAGE_SIZE / ZONE_SIZE_TO_PROFILING_WINDOW_SIZE_RATIO;
 
     //Misao: init mapping table
     id_zns->l2p_sz = n->ns_size/LOGICAL_PAGE_SIZE;

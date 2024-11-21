@@ -327,7 +327,7 @@ CpaStatus qat_dc_compress(FemuCtrl *n, uint32_t inst_idx, void *input, uint32_t 
     CpaStatus status = CPA_STATUS_SUCCESS;
     uint32_t left = count;
     uint32_t batch_sz = 0;
-
+    
     while (left)
     {
         batch_sz = left;

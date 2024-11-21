@@ -172,23 +172,28 @@ static struct ppa get_new_page(struct zns_ssd *zns)
 */
 
 // add by znbc
-static struct ppa get_new_page_bz(struct zns_ssd *zns)
+static struct ppa get_new_page_bz(struct zns_ssd *zns, FemuCtrl *n)
 {
     struct write_pointer_bz *wpp = &zns->wp_bz;
+    NvmeZone *zone = &n->zone_array[zns->active_zone];
+    u_int64_t ssblk = zone->ssblk[zone->ssblk_idx];
     struct ppa ppa;
-    if(zns->ssblk[wpp->ssblk_idx].write_pointer >= zns->num_ch * zns->num_lun  *zns->num_plane * zns->num_blk * zns->num_page / SUPERBLOCK_TO_SUBSUPERBLOCK_RATIO){
-        wpp->ssblk_idx++;
-        if(wpp->ssblk_idx == SUPERBLOCK_TO_SUBSUPERBLOCK_RATIO){
+    femu_debug("[znbc] zftl.c::get_new_page_bz : active_zone=%d zone->ssblk_idx=%ld, zns->ssblk[%ld].write_pointer=%ld zns->ssblk_size_limit=%ld\n",\
+    zns->active_zone, zone->ssblk_idx, ssblk, zns->ssblk[ssblk].write_pointer, zns->ssblk_size_limit);
+
+    if(zns->ssblk[ssblk].write_pointer >= zns->ssblk_size_limit){
+        zone->ssblk_idx++;
+        if(zone->ssblk_idx >= SUPERBLOCK_TO_SUBSUPERBLOCK_RATIO){
             ftl_err("zftl.c::get_new_page_bz: a zone have too many sub-superblocks! Should not happen.\n");
-            wpp->ssblk_idx = 0;
+            zone->ssblk_idx = 0;
         }
     }
     ppa.ppa = 0;
     ppa.g.ch = wpp->ch;
-    ppa.g.fc = zns->ssblk[wpp->ssblk_idx].lun;
-    ppa.g.blk = zns->ssblk[wpp->ssblk_idx].blk;
+    ppa.g.fc = zns->ssblk[ssblk].lun;
+    ppa.g.blk = zns->ssblk[ssblk].blk;
     ppa.g.V = 1; //not padding page
-    zns->ssblk[wpp->ssblk_idx].write_pointer++;
+    zns->ssblk[ssblk].write_pointer++;
     if(!valid_ppa(zns,&ppa))
     {
         ftl_err("[Misao] invalid ppa: ch %u lun %u pl %u blk %u pg %u subpg  %u \n",ppa.g.ch,ppa.g.fc,ppa.g.pl,ppa.g.blk,ppa.g.pg,ppa.g.spg);
@@ -243,7 +248,7 @@ static uint64_t zns_read(struct zns_ssd *zns, NvmeRequest *req)
     return maxlat;
 }
 
-static uint64_t zns_wc_flush(struct zns_ssd* zns, int wcidx, int type,uint64_t stime)
+static uint64_t zns_wc_flush(struct zns_ssd* zns, int wcidx, int type,uint64_t stime, FemuCtrl *n)
 {
     int i,j,p,subpage;
     struct ppa ppa;
@@ -257,7 +262,7 @@ static uint64_t zns_wc_flush(struct zns_ssd* zns, int wcidx, int type,uint64_t s
     {
         for(p = 0;p<zns->num_plane;p++){
             /* new write */
-            ppa = get_new_page_bz(zns);
+            ppa = get_new_page_bz(zns, n);
             ppa.g.pl = p;
             for(j = 0; j < flash_type ;j++)
             {
@@ -301,7 +306,7 @@ static uint64_t zns_wc_flush(struct zns_ssd* zns, int wcidx, int type,uint64_t s
     return maxlat;
 }
 
-static uint64_t zns_write(struct zns_ssd *zns, NvmeRequest *req)
+static uint64_t zns_write(struct zns_ssd *zns, NvmeRequest *req, FemuCtrl *n)
 {
     uint64_t lba = req->slba;
     uint32_t nlb = req->nlb;
@@ -312,6 +317,8 @@ static uint64_t zns_write(struct zns_ssd *zns, NvmeRequest *req)
     uint64_t sublat = 0, maxlat = 0;
     int i;
     int wcidx = zns_get_wcidx(zns);
+    
+    femu_debug("[znbc] zftl.c::zns_write : lba=%ld nlb=%d secs_per_pg=%ld start_lpn=%ld end_lpn=%ld \n", lba, nlb, secs_per_pg, start_lpn, end_lpn);
 
     if(wcidx==-1)
     {
@@ -332,7 +339,7 @@ static uint64_t zns_write(struct zns_ssd *zns, NvmeRequest *req)
                 wcidx = i;
             }
         }
-        if(t_used) maxlat = zns_wc_flush(zns,wcidx,USER_IO,req->stime);
+        if(t_used) maxlat = zns_wc_flush(zns,wcidx,USER_IO,req->stime,n);
         zns->cache.write_cache[wcidx].sblk = zns->active_zone;
     }
 
@@ -340,7 +347,7 @@ static uint64_t zns_write(struct zns_ssd *zns, NvmeRequest *req)
         if(zns->cache.write_cache[wcidx].used==zns->cache.write_cache[wcidx].cap)
         {
             femu_log("[W] flush wc %d (%u/%u)\n",wcidx,(int)zns->cache.write_cache[wcidx].used,(int)zns->cache.write_cache[wcidx].cap);
-            sublat = zns_wc_flush(zns,wcidx,USER_IO,req->stime);
+            sublat = zns_wc_flush(zns,wcidx,USER_IO,req->stime,n);
             femu_log("[W] flush lat: %u\n", (int)sublat);
             maxlat = (sublat > maxlat) ? sublat : maxlat;
             sublat = 0;
@@ -383,7 +390,7 @@ static void *ftl_thread(void *arg)
             ftl_assert(req);
             switch (req->cmd.opcode) {
             case NVME_CMD_WRITE:
-                lat = zns_write(zns, req);
+                lat = zns_write(zns, req, n);
                 break;
             case NVME_CMD_READ:
                 lat = zns_read(zns, req);

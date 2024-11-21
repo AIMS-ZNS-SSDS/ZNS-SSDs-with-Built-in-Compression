@@ -14,6 +14,7 @@
         "zftl.h": "c",
         "*.tmpl": "c",
         "*.idef": "c",
-        "*.def": "c"
+        "*.def": "c",
+        "*.code": "c"
     }
 }
