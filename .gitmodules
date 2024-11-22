@@ -1,3 +1,0 @@
-[submodule "fio"]
-	path = fio
-	url = https://github.com/axboe/fio
