@@ -44,6 +44,7 @@
 #define SRAM_WRITE_LATENCY_NS (1000)
 #define SRAM_READ_LATENCY_NS (1000)
 
+#ifdef BALLOON_ZNS
 /* added by znbc, here we specify that the size of a sub-superblock is 1/4 of the size of a superblock because num_lun is 4*/
 #define SUPERBLOCK_TO_SUBSUPERBLOCK_RATIO 4
 
@@ -51,6 +52,8 @@
 #define ZONE_SIZE_TO_PROFILING_WINDOW_SIZE_RATIO 8
 #define CR_VALUE_PERCENTILE 70
 #define INITIAL_SLOT_SIZE_TO_PAGE_SIZE_PERCENTILE 50
+
+#endif
 
 enum {
     NAND_READ =  0,
@@ -89,18 +92,20 @@ struct ppa {
     };
 };
 
-/* no use in Balloon-ZNS
+#ifndef BALLOON_ZNS
+//no use in Balloon-ZNS
 struct write_pointer {
     uint64_t ch;
     uint64_t lun;
 };
-*/
 
+#else
 // added by znbc: write pointer for Balloon-ZNS
 struct write_pointer_bz {
     //uint64_t ssblk_idx;
     uint64_t ch;
 };
+#endif
 
 struct nand_cmd {
     int cmd;
@@ -149,6 +154,7 @@ struct zns_sram{
     struct zns_write_cache* write_cache;
 };
 
+#ifdef BALLOON_ZNS
 /*added by znbc: sub-superblock. Give up lun level parallelism*/
 struct sub_superblock{
     bool used;
@@ -158,6 +164,7 @@ struct sub_superblock{
     uint64_t write_pointer; // record the number of physical pages written
     bool is_ext;
 };
+#endif
 
 struct zns_ssd {
     uint64_t num_ch;
@@ -167,7 +174,17 @@ struct zns_ssd {
     uint64_t num_page;
 
     struct zns_ch *ch;
-    //struct write_pointer wp;
+
+    #ifndef BALLOON_ZNS
+    struct write_pointer wp;
+    #else
+    /* added by znbc: for balloon-zns */
+    struct write_pointer_bz wp_bz;
+    struct sub_superblock * ssblk; // this records every sub-superblock
+    uint64_t num_ssblk;
+    uint64_t ssblk_size_limit; // size limit of sub-superblock 
+    uint64_t profiling_window_size;
+    #endif
 
     SSDNandFlashTiming timing; /*Misao: accurate  timing emulation for zns ssd.*/
     int flash_type;
@@ -187,13 +204,6 @@ struct zns_ssd {
 
     uint32_t lbasz;
     uint32_t active_zone;
-
-    /* added by znbc: for balloon-zns */
-    struct write_pointer_bz wp_bz;
-    struct sub_superblock * ssblk; // this records every sub-superblock
-    uint64_t num_ssblk;
-    uint64_t ssblk_size_limit; // size limit of sub-superblock 
-    uint64_t profiling_window_size;
 };
 
 enum NvmeZoneAttr {
@@ -282,22 +292,26 @@ typedef struct QEMU_PACKED NvmeIdNsZoned {
     uint8_t     vs[256];
 } NvmeIdNsZoned;
 
+#ifdef BALLOON_ZNS
 // added by znbc, profiling window for Balloon-ZNS
 typedef struct ProfilingWindow {
     uint64_t len; // current length of this profiling window
     uint64_t percentile_cnt[101]; // counts of different compressed-page-size to page-size percentile
     uint32_t slot_size_percentile;
 }ProfilingWindow;
+#endif
 
 typedef struct NvmeZone {
     NvmeZoneDescr   d;
     uint64_t        w_ptr;
     QTAILQ_ENTRY(NvmeZone) entry;
+    #ifdef BALLOON_ZNS
     // add by znbc
     uint64_t *ssblk;   // the idx-array of sub-superblocks mapped by this zone
     uint64_t num_ssblk; // the number of sub-superblocks mapped by this zone
     uint64_t ssblk_idx; // active sub-superblock
     ProfilingWindow *pfwd; // profiling window
+    #endif
 } NvmeZone;
 
 typedef struct NvmeNamespaceParams {

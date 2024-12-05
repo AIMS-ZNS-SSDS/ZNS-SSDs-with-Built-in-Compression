@@ -51,25 +51,26 @@ static inline void check_addr(int a, int max)
    assert(a >= 0 && a < max);
 }
 
-/* no use in Balloon-ZNS
+#ifndef BALLOON_ZNS
+// no use in Balloon-ZNS
 static void zns_advance_write_pointer(struct zns_ssd *zns)
 {
     struct write_pointer *wpp = &zns->wp;
 
     check_addr(wpp->ch, zns->num_ch);
     wpp->ch++;
-    if (wpp->ch == zns->num_ch) {
+    if (wpp->ch == zns->num_ch){
         wpp->ch = 0;
         check_addr(wpp->lun, zns->num_lun);
         wpp->lun++;
-        //in this case, we should go to next lun //
-        if (wpp->lun == zns->num_lun) {
+        // in this case, we should go to next lun //
+        if (wpp->lun == zns->num_lun){
             wpp->lun = 0;
         }
     }
 }
-*/
 
+#else
 
 // added by znbc
 static void zns_advance_write_pointer_bz(struct zns_ssd *zns)
@@ -78,10 +79,12 @@ static void zns_advance_write_pointer_bz(struct zns_ssd *zns)
 
     check_addr(wpp->ch, zns->num_ch);
     wpp->ch++;
-    if (wpp->ch == zns->num_ch) {
+    if (wpp->ch == zns->num_ch){
         wpp->ch = 0;
     }
 }
+
+#endif
 
 static uint64_t zns_advance_status(struct zns_ssd *zns, struct ppa *ppa,struct nand_cmd *ncmd)
 {
@@ -152,7 +155,7 @@ static inline bool mapped_ppa(struct ppa *ppa)
     return !(ppa->ppa == UNMAPPED_PPA);
 }
 
-/*
+#ifndef BALLOON_ZNS
 static struct ppa get_new_page(struct zns_ssd *zns)
 {
     struct write_pointer *wpp = &zns->wp;
@@ -169,8 +172,9 @@ static struct ppa get_new_page(struct zns_ssd *zns)
     }
     return ppa;
 }
-*/
+#endif
 
+#ifdef BALLOON_ZNS
 // add by znbc
 static struct ppa get_new_page_bz(struct zns_ssd *zns, FemuCtrl *n)
 {
@@ -201,7 +205,7 @@ static struct ppa get_new_page_bz(struct zns_ssd *zns, FemuCtrl *n)
     }
     return ppa;
 }
-
+#endif
 
 static int zns_get_wcidx(struct zns_ssd* zns)
 {
@@ -262,7 +266,11 @@ static uint64_t zns_wc_flush(struct zns_ssd* zns, int wcidx, int type,uint64_t s
     {
         for(p = 0;p<zns->num_plane;p++){
             /* new write */
+            #ifndef BALLOON_ZNS
+            ppa = get_new_page(zns);
+            #else
             ppa = get_new_page_bz(zns, n);
+            #endif
             ppa.g.pl = p;
             for(j = 0; j < flash_type ;j++)
             {
@@ -279,6 +287,7 @@ static uint64_t zns_wc_flush(struct zns_ssd* zns, int wcidx, int type,uint64_t s
                     oldppa = get_maptbl_ent(zns, lpn);
                     if (mapped_ppa(&oldppa)) {
                         /* FIXME: Misao: update old page information*/
+                        femu_err("[znbc] zftl.c::zns_wc_flush : the lpn is mapped!\n");
                     }
                     ppa.g.spg = subpage;
                     /* update maptbl */
@@ -300,7 +309,11 @@ static uint64_t zns_wc_flush(struct zns_ssd* zns, int wcidx, int type,uint64_t s
             }
         }
         /* need to advance the write pointer here */
+        #ifndef BALLOON_ZNS
+        zns_advance_write_pointer(zns);
+        #else
         zns_advance_write_pointer_bz(zns);
+        #endif
     }
     zns->cache.write_cache[wcidx].used = 0;
     return maxlat;

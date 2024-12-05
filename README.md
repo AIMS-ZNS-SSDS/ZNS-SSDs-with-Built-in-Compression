@@ -4,6 +4,10 @@
 
 femu: https://github.com/MoatLab/FEMU
 
+核心代码在`hw/femu/zns`文件夹。需要自己按官方github文档编译然后运行`run_zns.sh`。
+
+zns文件夹下的mode-selection.h中，COMPQAT和NO_FUNC是用于开启压缩功能的宏，FEMU_DEBUG_NVME用于输出一些中间结果。
+
 ## fio
 
 fio官方github：[axboe/fio: Flexible I/O Tester](https://github.com/axboe/fio)
