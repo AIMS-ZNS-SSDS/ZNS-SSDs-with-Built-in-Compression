@@ -15,6 +15,7 @@
         "*.tmpl": "c",
         "*.idef": "c",
         "*.def": "c",
-        "*.code": "c"
+        "*.code": "c",
+        "compare": "c"
     }
 }

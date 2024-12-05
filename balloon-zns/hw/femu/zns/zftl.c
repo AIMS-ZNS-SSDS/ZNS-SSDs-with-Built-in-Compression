@@ -84,6 +84,15 @@ static void zns_advance_write_pointer_bz(struct zns_ssd *zns)
     }
 }
 
+// added by znbc, get profiling window id by start lba
+static inline uint32_t zns_get_pfwd_id_by_slba(FemuCtrl *n, uint64_t slba)
+{
+
+    uint32_t zone_idx = (n->zone_size_log2 > 0 ? slba >> n->zone_size_log2 : slba / n->zone_size);
+    uint64_t zslba = (zone_idx) * n->zone_size;
+    return (slba - zslba) / (n->zone_size / ZONE_SIZE_TO_PROFILING_WINDOW_SIZE_RATIO);
+}
+
 #endif
 
 static uint64_t zns_advance_status(struct zns_ssd *zns, struct ppa *ppa,struct nand_cmd *ncmd)
@@ -252,6 +261,11 @@ static uint64_t zns_read(struct zns_ssd *zns, NvmeRequest *req)
     return maxlat;
 }
 
+#ifdef SHOW_FLUSH_MAXLAT
+uint64_t avg_maxlat=0, tot_maxlat=0;
+uint64_t flush_cnt=0, get_page_cnt=0;
+#endif
+
 static uint64_t zns_wc_flush(struct zns_ssd* zns, int wcidx, int type,uint64_t stime, FemuCtrl *n)
 {
     int i,j,p,subpage;
@@ -260,7 +274,10 @@ static uint64_t zns_wc_flush(struct zns_ssd* zns, int wcidx, int type,uint64_t s
     uint64_t lpn;
     int flash_type = zns->flash_type;
     uint64_t sublat = 0, maxlat = 0;
-
+    #ifdef BALLOON_ZNS
+    int ppa_res = 0;
+    struct ppa last_ppa;
+    #endif
     i = 0;
     while(i < zns->cache.write_cache[wcidx].used)
     {
@@ -271,7 +288,13 @@ static uint64_t zns_wc_flush(struct zns_ssd* zns, int wcidx, int type,uint64_t s
             #else
             ppa = get_new_page_bz(zns, n);
             #endif
+
+            #ifdef SHOW_FLUSH_MAXLAT
+            get_page_cnt++;
+            #endif
             ppa.g.pl = p;
+
+            #ifndef BALLOON_ZNS
             for(j = 0; j < flash_type ;j++)
             {
                 ppa.g.pg = get_blk(zns,&ppa)->page_wp;
@@ -287,7 +310,6 @@ static uint64_t zns_wc_flush(struct zns_ssd* zns, int wcidx, int type,uint64_t s
                     oldppa = get_maptbl_ent(zns, lpn);
                     if (mapped_ppa(&oldppa)) {
                         /* FIXME: Misao: update old page information*/
-                        femu_err("[znbc] zftl.c::zns_wc_flush : the lpn is mapped!\n");
                     }
                     ppa.g.spg = subpage;
                     /* update maptbl */
@@ -296,6 +318,53 @@ static uint64_t zns_wc_flush(struct zns_ssd* zns, int wcidx, int type,uint64_t s
                 }
                 i+=ZNS_PAGE_SIZE/LOGICAL_PAGE_SIZE;
             }
+            #else
+            for(j = 0; j < flash_type ;j++)
+            {
+                ppa.g.pg = get_blk(zns,&ppa)->page_wp;
+                get_blk(zns,&ppa)->page_wp++;
+                for(subpage = 0;subpage < ZNS_PAGE_SIZE/LOGICAL_PAGE_SIZE;subpage++)
+                {
+                    if(i >= zns->cache.write_cache[wcidx].used)
+                    {
+                        //No need to write an invalid page
+                        break;
+                    }
+                    ppa.g.spg = subpage;
+                    lpn = zns->cache.write_cache[wcidx].lpns[i];
+                    if(ppa_res > 0){
+                        i++;
+                        oldppa = get_maptbl_ent(zns, lpn);
+                        if (mapped_ppa(&oldppa)) {
+                            /* FIXME: Misao: update old page information*/
+                            femu_debug("[znbc] zftl.c::zns_wc_flush 333: the lpn is mapped!\n");
+                        }
+                        set_maptbl_ent(zns, lpn, &last_ppa);
+                        ppa_res += LOGICAL_PAGE_SIZE - zns->slots[lpn].slot_size_bs;
+                    }else
+                        ppa_res = ppa_res + LOGICAL_PAGE_SIZE;
+                    while(ppa_res >= zns->slots[lpn].slot_size_bs){
+                        ppa_res -= zns->slots[lpn].slot_size_bs;
+                        oldppa = get_maptbl_ent(zns, lpn);
+                        if (mapped_ppa(&oldppa)) {
+                            /* FIXME: Misao: update old page information*/
+                            femu_debug("[znbc] zftl.c::zns_wc_flush 344: the lpn is mapped!\n");
+                        }
+                        set_maptbl_ent(zns, lpn, &ppa);
+                        i++;
+                        if(i >= zns->cache.write_cache[wcidx].used){
+                            //No need to write an invalid page
+                            break;
+                        }
+                        lpn = zns->cache.write_cache[wcidx].lpns[i];
+                    }
+                    last_ppa = ppa;
+                    //femu_log("[F] lpn:\t%lu\t-->ch:\t%u\tlun:\t%u\tpl:\t%u\tblk:\t%u\tpg:\t%u\tsubpg:\t%u\tlat\t%lu\n",lpn,ppa.g.ch,ppa.g.fc,ppa.g.pl,ppa.g.blk,ppa.g.pg,ppa.g.spg,sublat);
+                }
+                //i+=ZNS_PAGE_SIZE/LOGICAL_PAGE_SIZE;
+            }
+            #endif
+
             //FIXME Misao: identify padding page
             if(ppa.g.V)
             {
@@ -316,6 +385,12 @@ static uint64_t zns_wc_flush(struct zns_ssd* zns, int wcidx, int type,uint64_t s
         #endif
     }
     zns->cache.write_cache[wcidx].used = 0;
+    #ifdef SHOW_FLUSH_MAXLAT
+    flush_cnt++;
+    tot_maxlat += maxlat;
+    avg_maxlat = tot_maxlat / flush_cnt;
+    printf("zftl.c::zns_wc_flush : maxlat = %lu flush_cnt=%lu tot_maxlat=%lu avg_maxlat=%lu get_page_cnt=%lu\n",maxlat, flush_cnt, tot_maxlat, avg_maxlat, get_page_cnt);
+    #endif
     return maxlat;
 }
 
@@ -330,7 +405,7 @@ static uint64_t zns_write(struct zns_ssd *zns, NvmeRequest *req, FemuCtrl *n)
     uint64_t sublat = 0, maxlat = 0;
     int i;
     int wcidx = zns_get_wcidx(zns);
-    
+
     femu_debug("[znbc] zftl.c::zns_write : lba=%ld nlb=%d secs_per_pg=%ld start_lpn=%ld end_lpn=%ld \n", lba, nlb, secs_per_pg, start_lpn, end_lpn);
 
     if(wcidx==-1)

@@ -53,6 +53,7 @@
 #define CR_VALUE_PERCENTILE 70
 #define INITIAL_SLOT_SIZE_TO_PAGE_SIZE_PERCENTILE 50
 
+#define SLOT_SIZE_BASE 256
 #endif
 
 enum {
@@ -164,6 +165,12 @@ struct sub_superblock{
     uint64_t write_pointer; // record the number of physical pages written
     bool is_ext;
 };
+
+struct slot_bz{
+    //uint32_t pfwd;
+    u_int32_t slot_size_bs;
+    bool have_residue;
+};
 #endif
 
 struct zns_ssd {
@@ -184,6 +191,7 @@ struct zns_ssd {
     uint64_t num_ssblk;
     uint64_t ssblk_size_limit; // size limit of sub-superblock 
     uint64_t profiling_window_size;
+    struct slot_bz *slots;
     #endif
 
     SSDNandFlashTiming timing; /*Misao: accurate  timing emulation for zns ssd.*/
@@ -298,6 +306,7 @@ typedef struct ProfilingWindow {
     uint64_t len; // current length of this profiling window
     uint64_t percentile_cnt[101]; // counts of different compressed-page-size to page-size percentile
     uint32_t slot_size_percentile;
+    uint32_t slot_size_bs; // bytes. base is 256B (SLOT_SIZE_BASE in zns.h)
 }ProfilingWindow;
 #endif
 
