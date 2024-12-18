@@ -192,6 +192,10 @@ struct zns_ssd {
     uint64_t ssblk_size_limit; // size limit of sub-superblock 
     uint64_t profiling_window_size;
     struct slot_bz *slots;
+    #ifdef BALLOON_ZNS_RESIDUE
+    uint64_t now_exssblk; // the extra-superblock in use. Enumerate from back to front!(eg. 63,62,...)
+    #endif
+
     #endif
 
     SSDNandFlashTiming timing; /*Misao: accurate  timing emulation for zns ssd.*/
@@ -320,6 +324,11 @@ typedef struct NvmeZone {
     uint64_t num_ssblk; // the number of sub-superblocks mapped by this zone
     uint64_t ssblk_idx; // active sub-superblock
     ProfilingWindow *pfwd; // profiling window
+    #ifdef BALLOON_ZNS_RESIDUE
+    uint64_t *exssblk;  // the idx-array of extra-sub-superblocks mapped by this zone
+    uint64_t num_exssblk;
+    uint64_t exssblk_idx;
+    #endif
     #endif
 } NvmeZone;
 

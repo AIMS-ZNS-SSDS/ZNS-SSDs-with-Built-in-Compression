@@ -216,6 +216,36 @@ static struct ppa get_new_page_bz(struct zns_ssd *zns, FemuCtrl *n)
 }
 #endif
 
+#ifdef BALLOON_ZNS_RESIDUE
+
+static struct ppa get_residue_page(struct zns_ssd *zns){
+    struct ppa ppa;
+    struct write_pointer_bz *wpp = &zns->wp_bz;
+    u_int64_t exssblk = zns->now_exssblk;
+    //femu_debug("zftl.c::get_residue_page: exssblk=%lu\n", exssblk);
+    if(zns->ssblk[exssblk].write_pointer >= zns->ssblk_size_limit){
+        if(zns->now_exssblk == 0 || zns->ssblk[ zns->now_exssblk -1].used == true){
+            ftl_debug("[Error] zftl.c::get_residue_page: Do not have more sub-superblocks for residue! Will cause wrong results!\n");
+            if(zns->now_exssblk == 0) zns->now_exssblk = 1;
+        }
+        zns->now_exssblk--;
+    }
+    ppa.ppa = 0;
+    ppa.g.ch = wpp->ch;
+    ppa.g.fc = zns->ssblk[exssblk].lun;
+    ppa.g.blk = zns->ssblk[exssblk].blk;
+    ppa.g.V = 1; //not padding page
+    zns->ssblk[exssblk].write_pointer++;
+    if(!valid_ppa(zns,&ppa))
+    {
+        ftl_err("[Misao] invalid ppa: ch %u lun %u pl %u blk %u pg %u subpg  %u \n",ppa.g.ch,ppa.g.fc,ppa.g.pl,ppa.g.blk,ppa.g.pg,ppa.g.spg);
+        ppa.ppa = UNMAPPED_PPA;
+    }
+    return ppa;
+}
+
+#endif
+
 static int zns_get_wcidx(struct zns_ssd* zns)
 {
     int i;
@@ -331,18 +361,9 @@ static uint64_t zns_wc_flush(struct zns_ssd* zns, int wcidx, int type,uint64_t s
                         break;
                     }
                     ppa.g.spg = subpage;
-                    lpn = zns->cache.write_cache[wcidx].lpns[i];
-                    if(ppa_res > 0){
-                        i++;
-                        oldppa = get_maptbl_ent(zns, lpn);
-                        if (mapped_ppa(&oldppa)) {
-                            /* FIXME: Misao: update old page information*/
-                            femu_debug("[znbc] zftl.c::zns_wc_flush 333: the lpn is mapped!\n");
-                        }
-                        set_maptbl_ent(zns, lpn, &last_ppa);
-                        ppa_res += LOGICAL_PAGE_SIZE - zns->slots[lpn].slot_size_bs;
-                    }else
-                        ppa_res = ppa_res + LOGICAL_PAGE_SIZE;
+                    lpn = zns->cache.write_cache[wcidx].lpns[i]; // this is also a slot-id
+                    bool map_last_ppa = (ppa_res > 0)? true: false;
+                    ppa_res += LOGICAL_PAGE_SIZE;
                     while(ppa_res >= zns->slots[lpn].slot_size_bs){
                         ppa_res -= zns->slots[lpn].slot_size_bs;
                         oldppa = get_maptbl_ent(zns, lpn);
@@ -350,12 +371,31 @@ static uint64_t zns_wc_flush(struct zns_ssd* zns, int wcidx, int type,uint64_t s
                             /* FIXME: Misao: update old page information*/
                             femu_debug("[znbc] zftl.c::zns_wc_flush 344: the lpn is mapped!\n");
                         }
-                        set_maptbl_ent(zns, lpn, &ppa);
+                        if(map_last_ppa == true){
+                            set_maptbl_ent(zns, lpn, &last_ppa);
+                            map_last_ppa = false;
+                        }
+                        else
+                            set_maptbl_ent(zns, lpn, &ppa);
+                        #ifdef BALLOON_ZNS_RESIDUE
+                        if(zns->slots[lpn].have_residue){
+                            struct nand_cmd swr;
+                            swr.type = type;
+                            swr.cmd = NAND_WRITE;
+                            swr.stime = stime;
+                            /* get latency statistics */
+                            struct ppa ppa_r = get_residue_page(zns);
+                            sublat = zns_advance_status(zns, &ppa_r, &swr);
+                            maxlat = (sublat > maxlat) ? sublat : maxlat;
+                            //femu_debug("zftl.c:: zns_wc_flush: slot_size_bs=%u residue sublat=%lu maxlat=%lu\n",zns->slots[lpn].slot_size_bs, sublat, maxlat);
+                        }
+                        #endif
                         i++;
                         if(i >= zns->cache.write_cache[wcidx].used){
                             //No need to write an invalid page
                             break;
                         }
+
                         lpn = zns->cache.write_cache[wcidx].lpns[i];
                     }
                     last_ppa = ppa;

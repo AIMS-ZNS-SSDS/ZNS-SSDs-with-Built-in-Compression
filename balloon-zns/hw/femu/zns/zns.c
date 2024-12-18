@@ -6,7 +6,7 @@
 #define NVME_DEFAULT_ZONE_SIZE      (128 * MiB)
 #define NVME_DEFAULT_MAX_AZ_SIZE    (128 * KiB)
 
-#define UPPER(x, base) ((x + (base) - 1) / (base) * (base)); 
+#define UPPER(x, base) ((x + (base) - 1) / (base) * (base)) 
 
 static inline uint32_t zns_zone_idx(NvmeNamespace *ns, uint64_t slba)
 {
@@ -152,6 +152,11 @@ static void zns_init_zoned_state(NvmeNamespace *ns)
             zone->pfwd[j].slot_size_percentile = INITIAL_SLOT_SIZE_TO_PAGE_SIZE_PERCENTILE;
             zone->pfwd[j].slot_size_bs = UPPER(LOGICAL_PAGE_SIZE * INITIAL_SLOT_SIZE_TO_PAGE_SIZE_PERCENTILE / 100, SLOT_SIZE_BASE);
         }
+        #ifdef BALLOON_ZNS_RESIDUE
+        zone->num_exssblk = 0;
+        zone->exssblk = g_malloc0(sizeof(u_int64_t) * SUPERBLOCK_TO_SUBSUPERBLOCK_RATIO);
+        zone->exssblk_idx = 0;
+        #endif
         #endif
     }
 
@@ -222,6 +227,10 @@ static void zns_clear_zone(NvmeNamespace *ns, NvmeZone *zone)
     }
     zone->num_ssblk = 0;
     zone->ssblk_idx = 0;
+    #ifdef BALLOON_ZNS_RESIDUE
+    zone->num_exssblk = 0;
+    zone->exssblk_idx = 0;
+    #endif
     #endif
 
     state = zns_get_zone_state(zone);
@@ -1040,7 +1049,7 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
         u_int64_t len = req->qsg.sg[0].len;
         int nsg = req->qsg.nsg;
         #ifdef BALLOON_ZNS
-        femu_debug("[znbc] zns.c::zns_nvme_rw : sg[0].len = %lu nsg = %d, pwd_size = %lu mb_oft=%ld\n", req->qsg.sg[0].len, req->qsg.nsg, n->zns->profiling_window_size, mb_oft_2);
+        femu_debug("[znbc] zns.c::zns_nvme_rw : sg[0].len = %lu nsg = %d, pwd_size = %lu mb_oft=%lu\n", req->qsg.sg[0].len, req->qsg.nsg, n->zns->profiling_window_size, mb_oft_2);
         #endif
         //qat_dc_compress(n,0,mb_2+mb_oft_2,req->qsg.sg[0].len, req->compressed_size,req->qsg.nsg);
     
@@ -1048,7 +1057,7 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
         //printf("nvme write\n");
 
         qat_dc_compress(n,0,mb_2+mb_oft_2,len, req->compressed_size, nsg);
-
+        //femu_debug("qat_dc_compress over!\n");
         #ifdef BALLOON_ZNS
         // added by znbc, update the profiling window
         for(int j = 0; j < nsg; j++){
@@ -1058,14 +1067,24 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
         if(zone->pfwd[pfwd_id].len >= n->zns->profiling_window_size){
             // calculate the slot size
             uint64_t cnt = 0, tot = n->zns->profiling_window_size / len;
+
+            #ifdef FEMU_DEBUG_NVME
+            for(int k = 0; k <= 100; k++){
+                printf("%lu ", zone->pfwd[pfwd_id].percentile_cnt[k]);
+            }
+            printf("\n");
+            #endif
+
             for(int k = 0; k <= 100; k++){
                 cnt += zone->pfwd[pfwd_id].percentile_cnt[k];
                 if(cnt * 100 >= tot * CR_VALUE_PERCENTILE){
+                    femu_debug("zone->pfwd[%d].percentile_cnt[%d]=%lu cnt=%lu tot=%lu %lu\n",pfwd_id, k, zone->pfwd[pfwd_id].percentile_cnt[k],  cnt, tot, cnt * 100 - tot * CR_VALUE_PERCENTILE);
                     if(!k) continue;
                     // update the next profiling window
                     zone->pfwd[pfwd_id + 1].slot_size_percentile = k;
-                    zone->pfwd[pfwd_id + 1].slot_size_bs = UPPER((LOGICAL_PAGE_SIZE * k / 100), SLOT_SIZE_BASE);
-                    femu_debug("[znbc] zns.c::zns_nvme_rw : zone->pfwd[%d].slot_size_percentile = %d slot_size_bs = %d\n", pfwd_id+1, zone->pfwd[pfwd_id].slot_size_percentile, zone->pfwd[pfwd_id + 1].slot_size_bs);
+                    zone->pfwd[pfwd_id + 1].slot_size_bs = UPPER((LOGICAL_PAGE_SIZE * k / 100), SLOT_SIZE_BASE) + SLOT_SIZE_BASE;
+                    if(zone->pfwd[pfwd_id + 1].slot_size_bs > LOGICAL_PAGE_SIZE) zone->pfwd[pfwd_id + 1].slot_size_bs = LOGICAL_PAGE_SIZE;
+                    femu_debug("[znbc] zns.c::zns_nvme_rw : zone->pfwd[%u].slot_size_percentile = %u slot_size_bs = %u\n", pfwd_id+1, zone->pfwd[pfwd_id + 1].slot_size_percentile, zone->pfwd[pfwd_id + 1].slot_size_bs);
                     break;
                 }
             }
@@ -1569,6 +1588,10 @@ static void zns_init_params(FemuCtrl *n)
         id_zns->ssblk[i].write_pointer = 0;
     }
     id_zns->profiling_window_size = id_zns->num_ch * id_zns->num_lun * id_zns->num_plane * id_zns->num_page * ZNS_PAGE_SIZE / ZONE_SIZE_TO_PROFILING_WINDOW_SIZE_RATIO;
+    #ifdef BALLOON_ZNS_RESIDUE
+    id_zns->now_exssblk = id_zns->num_ssblk - 1;
+    #endif
+    
     #endif
 
     //Misao: init mapping table
@@ -1637,6 +1660,12 @@ static int zns_init_zone_cap(FemuCtrl *n)
     n->cross_zone_read = false;
     n->max_active_zones = 0;
     n->max_open_zones = 0;
+    #ifdef MAX_ACTIVE_ZONES
+    n->max_active_zones = MAX_ACTIVE_ZONES;
+    #endif
+    #ifdef MAX_OPEN_ZONES
+    n->max_open_zones = MAX_OPEN_ZONES;
+    #endif
     n->zd_extension_size = 0;
 
     return 0;

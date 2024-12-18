@@ -3946,8 +3946,8 @@ foreach target : target_dirs
   endif
 
   # added by zwl qat
-  qat_deps = [cc.find_library('qat_s', dirs: '/home/wpy/femu-original/hw/femu/zns/qat/')]
-  qat_deps += cc.find_library('usdm_drv_s', dirs: '/home/wpy/femu-original/hw/femu/zns/qat/')
+  qat_deps = [cc.find_library('qat_s', dirs: '/home/weipanyue/femu-original/hw/femu/zns/qat/')]
+  qat_deps += cc.find_library('usdm_drv_s', dirs: '/home/weipanyue/femu-original/hw/femu/zns/qat/')
 
   foreach exe: execs
     exe_name = exe['name']
