@@ -59,6 +59,7 @@ static int zns_init_zone_geometry(NvmeNamespace *ns, Error **errp)
     n->zone_capacity = zone_cap / lbasz;
     n->num_zones = ns->size / lbasz / n->zone_size;
     
+    femu_debug("[znbc]zns.c::zns_init_zone_geometry: n->zone_size = %lu n->zone_capacity = %lu n->num_zones = %u\n", n->zone_size, n->zone_capacity, n->num_zones);
 
     if (n->max_open_zones > n->num_zones) {
         femu_err("max_open_zones value %u exceeds the number of zones %u",
@@ -1046,19 +1047,41 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
         uint64_t mb_oft_2 = (&data_offset2)[0];
         void *mb_2 = n->mbe->logical_space;
         req->compressed_size = g_malloc(sizeof(uint32_t) * req->qsg.nsg);
-        u_int64_t len = req->qsg.sg[0].len;
+        // znbc: the len of sg may be different (eg. when doing rocksdb test)
+        u_int64_t len = req->qsg.sg[0].len; 
         int nsg = req->qsg.nsg;
+        femu_debug("[znbc] zns.c::zns_nvme_rw : sg[0].len = %lu sg[1].len = %lu sg[2].len = %lu, nsg = %d\n", req->qsg.sg[0].len, req->qsg.sg[1].len, req->qsg.sg[2].len, req->qsg.nsg);
         #ifdef BALLOON_ZNS
-        femu_debug("[znbc] zns.c::zns_nvme_rw : sg[0].len = %lu nsg = %d, pwd_size = %lu mb_oft=%lu\n", req->qsg.sg[0].len, req->qsg.nsg, n->zns->profiling_window_size, mb_oft_2);
+        femu_debug("[znbc] zns.c::zns_nvme_rw : pwd_size = %lu mb_oft=%lu\n", n->zns->profiling_window_size, mb_oft_2);
         #endif
         //qat_dc_compress(n,0,mb_2+mb_oft_2,req->qsg.sg[0].len, req->compressed_size,req->qsg.nsg);
     
+        #ifdef DIFFERENT_SG_LEN
+        u_int64_t *qsg_len = g_malloc(sizeof(u_int64_t) * req->qsg.nsg);
+        for(int i = 0; i < nsg; i++){
+            qsg_len[i] = req->qsg.sg[i].len;
+        }
+        #endif
+
         backend_rw(n->mbe, &req->qsg, &data_offset, req->is_write);
         //printf("nvme write\n");
 
+        #ifdef DIFFERENT_SG_LEN
+        qat_dc_compress_sg(n,0, mb_2+mb_oft_2, qsg_len, req->compressed_size, nsg); // added by znbc, for different sg length
+        #else
         qat_dc_compress(n,0,mb_2+mb_oft_2,len, req->compressed_size, nsg);
+        #endif
+
         //femu_debug("qat_dc_compress over!\n");
         #ifdef BALLOON_ZNS
+
+        #ifdef SG_LEN_EQU_LOGICAL_PAGE_SIZE
+        // for some reason the rocksdb have inputs which sg.len != 4096, I forcefully expanded them to 4096 here, there may be other better ways...
+        assert(len <= LOGICAL_PAGE_SIZE);
+        if(len != LOGICAL_PAGE_SIZE)
+            len = LOGICAL_PAGE_SIZE;
+        #endif
+
         // added by znbc, update the profiling window
         for(int j = 0; j < nsg; j++){
             zone->pfwd[pfwd_id].percentile_cnt[req->compressed_size[j] * 100 / len] ++;
@@ -1108,8 +1131,10 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
             struct slot_bz *slot = &n->zns->slots[lpn];
             slot->slot_size_bs = zone->pfwd[pfwd_id].slot_size_bs;
             slot->have_residue = (req->compressed_size[i] > zone->pfwd[pfwd_id].slot_size_bs) ? true :false;
-            femu_debug("slot_id=lpn=%lu compressed_size[%lu]=%u pfwd_id=%u have_residue=%d\n", lpn, i, req->compressed_size[i], pfwd_id, slot->have_residue);
+            //femu_debug("slot_id=lpn=%lu compressed_size[%lu]=%u pfwd_id=%u have_residue=%d\n", lpn, i, req->compressed_size[i], pfwd_id, slot->have_residue);
+            //femu_debug("(%lu,[%lu],%u,%u,%d), \n", lpn, i, req->compressed_size[i], pfwd_id, slot->have_residue);
         }
+        femu_debug("\n");
         #endif
 
         #else
@@ -1558,7 +1583,11 @@ static void zns_init_params(FemuCtrl *n)
     id_zns->num_lun = n->zns_params.zns_num_lun;
     id_zns->num_plane = n->zns_params.zns_num_plane;
     id_zns->num_blk = n->zns_params.zns_num_blk;
+    #ifdef NUM_PAGE_256
+    id_zns->num_page = 256;
+    #else
     id_zns->num_page = n->ns_size/ZNS_PAGE_SIZE/(id_zns->num_ch*id_zns->num_lun*id_zns->num_blk);
+    #endif
     id_zns->lbasz = 1 << zns_ns_lbads(&n->namespaces[0]);
     id_zns->flash_type = n->zns_params.zns_flash_type;
 
@@ -1625,6 +1654,55 @@ static void zns_init_params(FemuCtrl *n)
     //femu_log("|\tl2p sz\t: %lu\t|\tl2p cache sz\t: %u\t|\n",id_zns->l2p_sz,id_zns->cache.num_l2p_ent);
     femu_log("|\tprogram unit\t: %lu KiB\t|\tstripe unit\t: %lu KiB\t|\t# of write caches\t: %u\t|\t size of write caches (4KiB)\t: %lu\t|\n",id_zns->program_unit/(KiB),id_zns->stripe_uint/(KiB),id_zns->cache.num_wc,(id_zns->stripe_uint/LOGICAL_PAGE_SIZE));
     femu_log("===========================================\n"); 
+
+    #ifdef COMPQAT
+    femu_log("| using QAT (not origin femu): \e[1;32m YES \e[0m \n"); 
+    #else
+    femu_log("| using QAT (not origin femu): \e[1;31m NO \e[0m\n"); 
+    #endif
+
+    #ifdef BALLOON_ZNS
+    femu_log("| using Balloon-ZNS: \e[1;32m YES \e[0m \n"); 
+    #else
+    femu_log("| using Balloon-ZNS: \e[1;31m NO \e[0m\n"); 
+    #endif
+
+    #ifdef BALLOON_ZNS
+    femu_log("===========================================\n"); 
+    femu_log("| About Balloon-ZNS mode selection:\n"); 
+    
+    #ifdef BALLOON_ZNS_RESIDUE
+    femu_log("| Handle residue: \e[1;32m YES \e[0m \n"); 
+    #else
+    femu_log("| Handle residue: \e[1;31m NO \e[0m \n"); 
+    #endif
+
+    #ifdef SG_LEN_EQU_LOGICAL_PAGE_SIZE
+    femu_log("| make the sg length equal to logical page size(not a good choice): \e[1;32m YES \e[0m \n"); 
+    #else
+    femu_log("| make the sg length equal to logical page size(not a good choice): \e[1;31m NO \e[0m\n"); 
+    #endif
+
+    #ifdef NUM_PAGE_256
+    femu_log("| Make the num of pages certain(256), so that we can increase SSD_SIZE_MB to increase num_zones(for rocksdb, which need 32 zones): \e[1;32m YES \e[0m \n"); 
+    #else
+    femu_log("| Make the num of pages certain(256), so that we can increase SSD_SIZE_MB to increase num_zones(for rocksdb, which need 32 zones): \e[1;31m NO \e[0m\n"); 
+    #endif
+
+    #ifdef DIFFERENT_SG_LEN
+    femu_log("| can handle different sg length: \e[1;32m YES \e[0m \n"); 
+    #else
+    femu_log("| can handle different sg length: \e[1;31m NO \e[0m\n"); 
+    #endif
+
+    #ifdef LINKED_SLOT
+    femu_log("| use the linked slot design: \e[1;32m YES \e[0m \n"); 
+    #else
+    femu_log("| use the linked slot design: \e[1;31m NO \e[0m\n"); 
+    #endif
+
+    femu_log("===========================================\n"); 
+    #endif
 
     //Misao: use average read latency
     id_zns->timing.pg_rd_lat[SLC] = SLC_READ_LATENCY_NS;

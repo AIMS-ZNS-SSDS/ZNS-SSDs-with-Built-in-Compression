@@ -44,18 +44,6 @@
 #define SRAM_WRITE_LATENCY_NS (1000)
 #define SRAM_READ_LATENCY_NS (1000)
 
-#ifdef BALLOON_ZNS
-/* added by znbc, here we specify that the size of a sub-superblock is 1/4 of the size of a superblock because num_lun is 4*/
-#define SUPERBLOCK_TO_SUBSUPERBLOCK_RATIO 4
-
-/* added by znbc*/
-#define ZONE_SIZE_TO_PROFILING_WINDOW_SIZE_RATIO 8
-#define CR_VALUE_PERCENTILE 70
-#define INITIAL_SLOT_SIZE_TO_PAGE_SIZE_PERCENTILE 50
-
-#define SLOT_SIZE_BASE 256
-#endif
-
 enum {
     NAND_READ =  0,
     NAND_WRITE = 1,
@@ -170,6 +158,11 @@ struct slot_bz{
     //uint32_t pfwd;
     u_int32_t slot_size_bs;
     bool have_residue;
+    struct ppa residue_ppa;  // 残差物理地址
+    uint32_t residue_len;    // 残差长度
+    #ifdef LINKED_SLOT
+        uint32_t next_slot;  // 指向下一个Slot的索引（0表示无后续）
+    #endif
 };
 #endif
 

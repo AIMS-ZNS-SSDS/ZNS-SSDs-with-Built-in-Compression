@@ -23,6 +23,7 @@
 CpaStatus qat_init(FemuCtrl *n);
 void qat_exit(FemuCtrl *n);
 CpaStatus qat_dc_compress(FemuCtrl *n, uint32_t inst_idx, void *input, uint32_t input_len, uint32_t *output_len, uint32_t count);
+CpaStatus qat_dc_compress_sg(FemuCtrl *n, uint32_t inst_idx, void *input, u_int64_t *qsg_len, uint32_t *output_len, uint32_t count);
 CpaStatus qat_dc_decompress(FemuCtrl *n, uint32_t inst_idx, void *input, uint32_t input_len, void *output, uint32_t *output_len, uint32_t count);
 #define QAT_OP_PER_INST (128)
 

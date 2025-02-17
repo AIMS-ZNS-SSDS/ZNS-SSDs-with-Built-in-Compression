@@ -384,6 +384,70 @@ CpaStatus qat_dc_compress(FemuCtrl *n, uint32_t inst_idx, void *input, uint32_t 
     }
     return status;
 }
+
+/* znbc: qat_dc_compress for different sg length (eg. rocksdb test) */
+CpaStatus qat_dc_compress_sg(FemuCtrl *n, uint32_t inst_idx, void *input, 
+    u_int64_t *qsg_len, uint32_t *output_len, uint32_t count) {
+    CpaInstanceHandle *dcInstHandles = n->dc_inst_handles;
+    Cpa8U **pSrcBuffers = n->dc_src_buffers;
+    CpaDcDpOpData **pOpDatas = n->dc_op_datas;
+    uint32_t *dc_inflight_ops = n->dc_inflight_ops;
+    CpaStatus status = CPA_STATUS_SUCCESS;
+    uint32_t left = count;
+    uint32_t batch_sz = 0;
+    int sg_idx = 0;
+    while (left)
+    {
+        batch_sz = left;
+        if (batch_sz > QAT_OP_PER_INST) batch_sz = QAT_OP_PER_INST;
+        // 遍历SG列表中的元素
+        for (uint32_t i = sg_idx; i < sg_idx + batch_sz; i++) {
+            uint32_t input_len = qsg_len[i];
+
+            // 逐个处理SG元素
+            memcpy(pSrcBuffers[inst_idx * QAT_OP_PER_INST + i], input, input_len);
+            pOpDatas[inst_idx * QAT_OP_PER_INST + i]->bufferLenToCompress = input_len;
+            pOpDatas[inst_idx * QAT_OP_PER_INST + i]->sessDirection = CPA_DC_DIR_COMPRESS;
+            pOpDatas[inst_idx * QAT_OP_PER_INST + i]->srcBufferLen = input_len;
+            INIT_DC_DP_CNV_OPDATA(pOpDatas[inst_idx * QAT_OP_PER_INST + i]);
+
+            input += input_len;
+        }
+
+        // 批量提交
+        qatomic_set(dc_inflight_ops + inst_idx, batch_sz);
+        status = cpaDcDpEnqueueOpBatch(batch_sz, pOpDatas + inst_idx * QAT_OP_PER_INST, CPA_TRUE);
+
+        if (CPA_STATUS_SUCCESS != status)
+        {
+            qat_error("cpaDcDpEnqueueOpBatch failed. (status = %d)\n", status);
+        }
+
+        // 等待完成并获取压缩后长度
+        do
+        {
+            status = icp_sal_DcPollDpInstance(dcInstHandles[inst_idx], 0);
+        } while (((CPA_STATUS_SUCCESS == status) || (CPA_STATUS_RETRY == status)) &&
+                    (qatomic_read(dc_inflight_ops + inst_idx) != 0));
+
+        // 处理压缩操作结果
+        for (uint32_t i = sg_idx; i < sg_idx + batch_sz; i++)
+        { 
+            if(pOpDatas[inst_idx * QAT_OP_PER_INST + i]->results.produced > qsg_len[i]){
+                qatomic_set(output_len + i, 4096);
+            } else {
+                qatomic_set(output_len + i, pOpDatas[inst_idx * QAT_OP_PER_INST + i]->results.produced);
+            }
+            
+            //memcpy(output, pDstBuffers[inst_idx], *output_len);
+        }
+
+        left -= batch_sz;
+        sg_idx += batch_sz;
+    }
+    return status;
+}
+
 // CpaStatus qat_dc_compress(FemuCtrl *n, unit32_t inst_idx, void *input, uint32_t input_len, uint32_t *output_len){
 //     CpaInstanceHandle *dcInstHandles = n->dc_inst_handles;
 // }
