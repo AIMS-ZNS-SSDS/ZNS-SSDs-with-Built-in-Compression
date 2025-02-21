@@ -82,3 +82,9 @@ rw=write
 ```
 
 我的测试数据和文件都比较简单，复杂的情况不确定能否正常测试。
+
+## YCSB
+
+我使用YCSB-cpp进行测试，对代码进行了一定修改
+
+仓库：https://github.com/bystreamzhang/YCSB-cpp-modification

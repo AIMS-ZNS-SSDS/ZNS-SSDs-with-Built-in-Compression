@@ -340,6 +340,7 @@ static uint64_t zns_wc_flush(struct zns_ssd* zns, int wcidx, int type,uint64_t s
                     oldppa = get_maptbl_ent(zns, lpn);
                     if (mapped_ppa(&oldppa)) {
                         /* FIXME: Misao: update old page information*/
+                        femu_debug("[znbc] zftl.c::zns_wc_flush 344: the lpn is mapped!\n");
                     }
                     ppa.g.spg = subpage;
                     /* update maptbl */

@@ -939,6 +939,11 @@ static inline uint32_t zns_get_pfwd_id_by_slba(NvmeNamespace *ns, uint64_t slba)
 }
 #endif
 
+#ifdef RESIDUE_NUMBER_COUNT
+static int count_slot=0;
+static int have_residue=0;
+#endif
+
 /*Misao: backend read/write without latency emulation*/
 static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
                            NvmeRequest *req,bool append)
@@ -1105,7 +1110,11 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
                     if(!k) continue;
                     // update the next profiling window
                     zone->pfwd[pfwd_id + 1].slot_size_percentile = k;
-                    zone->pfwd[pfwd_id + 1].slot_size_bs = UPPER((LOGICAL_PAGE_SIZE * k / 100), SLOT_SIZE_BASE) + SLOT_SIZE_BASE;
+                    #ifdef BIGGER_SLOT_SIZE
+                    zone->pfwd[pfwd_id + 1].slot_size_bs = UPPER((LOGICAL_PAGE_SIZE * k / 100), SLOT_SIZE_BASE) + SLOT_SIZE_BASE; // can reduce residue number
+                    #else
+                    zone->pfwd[pfwd_id + 1].slot_size_bs = UPPER((LOGICAL_PAGE_SIZE * k / 100), SLOT_SIZE_BASE); // same as Balloon-ZNS paper
+                    #endif
                     if(zone->pfwd[pfwd_id + 1].slot_size_bs > LOGICAL_PAGE_SIZE) zone->pfwd[pfwd_id + 1].slot_size_bs = LOGICAL_PAGE_SIZE;
                     femu_debug("[znbc] zns.c::zns_nvme_rw : zone->pfwd[%u].slot_size_percentile = %u slot_size_bs = %u\n", pfwd_id+1, zone->pfwd[pfwd_id + 1].slot_size_percentile, zone->pfwd[pfwd_id + 1].slot_size_bs);
                     break;
@@ -1131,7 +1140,12 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
             struct slot_bz *slot = &n->zns->slots[lpn];
             slot->slot_size_bs = zone->pfwd[pfwd_id].slot_size_bs;
             slot->have_residue = (req->compressed_size[i] > zone->pfwd[pfwd_id].slot_size_bs) ? true :false;
-            //femu_debug("slot_id=lpn=%lu compressed_size[%lu]=%u pfwd_id=%u have_residue=%d\n", lpn, i, req->compressed_size[i], pfwd_id, slot->have_residue);
+            #ifdef RESIDUE_NUMBER_COUNT
+            if(slot->have_residue == true) have_residue++;
+            count_slot++;
+            femu_debug("slot_id=lpn=%lu compressed_size[%lu]=%u pfwd_id=%u have_residue=%d cnt_have_residue=%d count_slot=%d\n", lpn, i, req->compressed_size[i], pfwd_id, slot->have_residue, have_residue, count_slot);
+            #endif
+            
             //femu_debug("(%lu,[%lu],%u,%u,%d), \n", lpn, i, req->compressed_size[i], pfwd_id, slot->have_residue);
         }
         femu_debug("\n");

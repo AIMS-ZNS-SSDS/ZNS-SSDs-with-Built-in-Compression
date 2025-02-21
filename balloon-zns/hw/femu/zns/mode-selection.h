@@ -5,21 +5,23 @@
 */
 
 #define FEMU_DEBUG_NVME // just for testing
+// #define RESIDUE_NUMBER_COUNT 
 
-//#define COMPQAT // just enable qat and do compress, should enable BALLOON_ZNS to have real effects
+#define COMPQAT // just enable qat and do compress, should enable BALLOON_ZNS to have real effects
 
 #ifdef COMPQAT
     #define NO_FUNC
     #define DIFFERENT_SG_LEN // eg. rocksdb test. 
 #endif
 
-//#define BALLOON_ZNS // need to enable COMPQAT and NO_FUNC first
+#define BALLOON_ZNS // need to enable COMPQAT and NO_FUNC first
 
 #define SHOW_FLUSH_MAXLAT
 
 #ifdef BALLOON_ZNS
     //#define BALLOON_ZNS_RESIDUE // this should always be open after relevant code is completed
     #define SG_LEN_EQU_LOGICAL_PAGE_SIZE // Assuming that the length of sg is the logical page length
+    //#define BIGGER_SLOT_SIZE // Add a SLOT_SIZE_BASE, otherwise the residue number will be large. See zns.c::zns_nvme_rw.
     //#define LINKED_SLOT // not enable
 #endif
 
