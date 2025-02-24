@@ -105,6 +105,7 @@ static uint64_t get_subsuperblock(FemuCtrl *n, uint32_t zone_idx){
         }
     }
     femu_debug("\n[znbc]  zns->num_ssblk = %ld\n.", zns->num_ssblk);
+    assert(0);
     return -1;
 }
 #endif
@@ -1621,7 +1622,8 @@ static void zns_init_params(FemuCtrl *n)
     id_zns->wp_bz.ch = 0;
     id_zns->ssblk = g_malloc(sizeof(struct sub_superblock) * id_zns->num_blk * SUPERBLOCK_TO_SUBSUPERBLOCK_RATIO);
     id_zns->num_ssblk = id_zns->num_blk * SUPERBLOCK_TO_SUBSUPERBLOCK_RATIO;
-    id_zns->ssblk_size_limit = id_zns->num_ch * id_zns->num_lun * id_zns->num_plane * id_zns->num_page / id_zns->flash_type / SUPERBLOCK_TO_SUBSUPERBLOCK_RATIO;
+    id_zns->ssblk_size_limit = id_zns->num_ch * id_zns->num_lun * id_zns->num_plane * id_zns->num_page \
+    / id_zns->flash_type / SUPERBLOCK_TO_SUBSUPERBLOCK_RATIO;
     for (i = 0; i < id_zns->num_ssblk; i++) {
         id_zns->ssblk[i].used = 0;
         id_zns->ssblk[i].to_zone = 0;
@@ -1630,7 +1632,8 @@ static void zns_init_params(FemuCtrl *n)
         id_zns->ssblk[i].blk = i / SUPERBLOCK_TO_SUBSUPERBLOCK_RATIO;
         id_zns->ssblk[i].write_pointer = 0;
     }
-    id_zns->profiling_window_size = id_zns->num_ch * id_zns->num_lun * id_zns->num_plane * id_zns->num_page * ZNS_PAGE_SIZE / ZONE_SIZE_TO_PROFILING_WINDOW_SIZE_RATIO;
+    id_zns->profiling_window_size = id_zns->num_ch * id_zns->num_lun * id_zns->num_plane * id_zns->num_page \
+    * ZNS_PAGE_SIZE / ZONE_SIZE_TO_PROFILING_WINDOW_SIZE_RATIO;
     #ifdef BALLOON_ZNS_RESIDUE
     id_zns->now_exssblk = id_zns->num_ssblk - 1;
     #endif

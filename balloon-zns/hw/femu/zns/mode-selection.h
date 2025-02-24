@@ -29,10 +29,9 @@
 /* added by znbc, here we specify that the size of a sub-superblock is 1/4 of the size of a superblock because num_lun is 4*/
 #define SUPERBLOCK_TO_SUBSUPERBLOCK_RATIO 4
 
-/* added by znbc*/
 #define ZONE_SIZE_TO_PROFILING_WINDOW_SIZE_RATIO 8
 #define CR_VALUE_PERCENTILE 70
-#define INITIAL_SLOT_SIZE_TO_PAGE_SIZE_PERCENTILE 50
+#define INITIAL_SLOT_SIZE_TO_PAGE_SIZE_PERCENTILE 100 
 
 #define SLOT_SIZE_BASE 256
 #endif

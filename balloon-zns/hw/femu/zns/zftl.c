@@ -356,13 +356,13 @@ static uint64_t zns_wc_flush(struct zns_ssd* zns, int wcidx, int type,uint64_t s
                 get_blk(zns,&ppa)->page_wp++;
                 for(subpage = 0;subpage < ZNS_PAGE_SIZE/LOGICAL_PAGE_SIZE;subpage++)
                 {
-                    if(i >= zns->cache.write_cache[wcidx].used)
+                    if(i + subpage >= zns->cache.write_cache[wcidx].used)
                     {
                         //No need to write an invalid page
                         break;
                     }
                     ppa.g.spg = subpage;
-                    lpn = zns->cache.write_cache[wcidx].lpns[i]; // this is also a slot-id
+                    lpn = zns->cache.write_cache[wcidx].lpns[i+subpage]; // this is also a slot-id
                     bool map_last_ppa = (ppa_res > 0)? true: false;
                     ppa_res += LOGICAL_PAGE_SIZE;
                     while(ppa_res >= zns->slots[lpn].slot_size_bs){
@@ -397,7 +397,7 @@ static uint64_t zns_wc_flush(struct zns_ssd* zns, int wcidx, int type,uint64_t s
                             break;
                         }
 
-                        lpn = zns->cache.write_cache[wcidx].lpns[i];
+                        lpn = zns->cache.write_cache[wcidx].lpns[i+subpage];
                     }
                     last_ppa = ppa;
                     //femu_log("[F] lpn:\t%lu\t-->ch:\t%u\tlun:\t%u\tpl:\t%u\tblk:\t%u\tpg:\t%u\tsubpg:\t%u\tlat\t%lu\n",lpn,ppa.g.ch,ppa.g.fc,ppa.g.pl,ppa.g.blk,ppa.g.pg,ppa.g.spg,sublat);

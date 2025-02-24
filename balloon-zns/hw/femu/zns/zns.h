@@ -370,7 +370,7 @@ static inline uint64_t zns_ns_nlbas(NvmeNamespace *ns)
 /* convert an LBA to the equivalent in bytes */
 static inline size_t zns_l2b(NvmeNamespace *ns, uint64_t lba)
 {
-    return lba << zns_ns_lbads(ns); //地址转换为字节，比如LBA 0的起始byte 0， LBA 1的起始byte 4096
+    return lba << zns_ns_lbads(ns); //地址转换为字节，比如LBA 0的起始byte 0， LBA 1的起始byte 512
 }
 
 static inline NvmeZoneState zns_get_zone_state(NvmeZone *zone)
