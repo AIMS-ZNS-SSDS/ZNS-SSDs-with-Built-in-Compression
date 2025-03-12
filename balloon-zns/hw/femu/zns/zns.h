@@ -1,15 +1,20 @@
 #ifndef __FEMU_ZNS_H
 #define __FEMU_ZNS_H
 
+#include "../nvme.h"
+#include "zftl.h"
+
 #define SPG_BITS    (2)
 #define PG_BITS     (16)
 #define BLK_BITS    (32)
 #define PL_BITS     (1)
 #define FC_BITS     (2)
+#ifdef CH_BITS3
+#define CH_BITS     (3) // 8 channels, same as run-zns.sh configured
+#else
 #define CH_BITS     (1)
+#endif
 
-#include "../nvme.h"
-#include "zftl.h"
 
 #define LOGICAL_PAGE_SIZE (4*KiB)
 #define ZNS_PAGE_SIZE (16*KiB)
@@ -112,6 +117,11 @@ struct zns_blk {
 struct zns_plane{
     struct zns_blk *blk;
     uint64_t next_plane_avail_time;
+    #ifdef SHOW_EACH_PLANE_TOT_LAT
+    uint64_t plane_tot_lat;
+    uint64_t plane_r_lat;
+    uint64_t plane_w_lat;
+    #endif
 };
 
 struct zns_fc { //flash chip

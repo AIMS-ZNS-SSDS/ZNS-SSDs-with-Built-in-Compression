@@ -105,7 +105,8 @@ static uint64_t zns_advance_status(struct zns_ssd *zns, struct ppa *ppa,struct n
 
     //plane level parallism
     struct zns_plane *pl = get_plane(zns, ppa);
-
+    femu_debug("[znbc] zftl.c::zns_advance_status plane-test pl = %#lx next_plane_avail_time = %lu req_stime = %lu\n", (unsigned long long)(pl), pl->next_plane_avail_time, req_stime);
+    femu_debug("[znbc] zftl.c::zns_advance_status ppa: ppa = %#lx ch=%lu fc=%lu plane=%lu bk=%lu spg=%lu pg=%lu\n", ppa->ppa, ppa->g.ch, ppa->g.fc, ppa->g.pl, ppa->g.blk, ppa->g.spg, ppa->g.pg);
     uint64_t lat = 0;
     int nand_type = get_blk(zns,ppa)->nand_type;
 
@@ -119,6 +120,13 @@ static uint64_t zns_advance_status(struct zns_ssd *zns, struct ppa *ppa,struct n
                      pl->next_plane_avail_time;
         pl->next_plane_avail_time = nand_stime + read_delay;
         lat = pl->next_plane_avail_time - req_stime;
+        #ifdef COMPQAT
+        lat += QAT_DECOMPRESSION_LATENCY_NS;
+        #endif
+        #ifdef SHOW_EACH_PLANE_TOT_LAT
+        pl->plane_r_lat += read_delay;
+        pl->plane_tot_lat += read_delay;
+        #endif
 	    break;
 
     case NAND_WRITE:
@@ -126,6 +134,13 @@ static uint64_t zns_advance_status(struct zns_ssd *zns, struct ppa *ppa,struct n
 		            pl->next_plane_avail_time;
 	    pl->next_plane_avail_time = nand_stime + write_delay;
 	    lat = pl->next_plane_avail_time - req_stime;
+        #ifdef COMPQAT
+        lat += QAT_COMPRESSION_LATENCY_NS;
+        #endif
+        #ifdef SHOW_EACH_PLANE_TOT_LAT
+        pl->plane_w_lat += write_delay;
+        pl->plane_tot_lat += write_delay;
+        #endif
 	    break;
 
     case NAND_ERASE:
@@ -133,13 +148,19 @@ static uint64_t zns_advance_status(struct zns_ssd *zns, struct ppa *ppa,struct n
                         pl->next_plane_avail_time;
         pl->next_plane_avail_time = nand_stime + erase_delay;
         lat = pl->next_plane_avail_time - req_stime;
+        #ifdef SHOW_EACH_PLANE_TOT_LAT
+        pl->plane_tot_lat += write_delay;
+        #endif
         break;
 
     default:
         /* To silent warnings */
         ;
     }
-
+    femu_debug("[znbc] zftl.c::zns_advance_status plane-test new next_plane_avail_time = %llu, req_stime = %llu, lat = %llu\n", pl->next_plane_avail_time, req_stime, lat);
+    #ifdef SHOW_EACH_PLANE_TOT_LAT
+    femu_debug("[znbc] zftl.c::zns_advance_status: plant_[%#llx] tot_lat = %llu r_lat = %llu w_lat = %llu\n", (unsigned long long)(pl), pl->plane_tot_lat, pl->plane_r_lat, pl->plane_w_lat);
+    #endif
     return lat;
 }
 
@@ -270,9 +291,17 @@ static uint64_t zns_read(struct zns_ssd *zns, NvmeRequest *req)
     struct ppa ppa;
     uint64_t lpn;
     uint64_t sublat, maxlat = 0;
+    #ifdef BALLOON_ZNS
+    struct slot_bz slot;
+    int ppa_res = 0;
+    int ppa_residue_len = 0;
+    #endif
     
+    femu_debug("[znbc] zftl.c::zns_read : lba=%ld nlb=%d secs_per_pg=%ld start_lpn=%ld end_lpn=%ld active_zone=%u\n", lba, nlb, secs_per_pg, start_lpn, end_lpn, zns->active_zone);
+
     /* normal IO read path */
     for (lpn = start_lpn; lpn <= end_lpn; lpn++) {
+        #ifndef BALLOON_ZNS
         ppa = get_maptbl_ent(zns, lpn);
         if (!mapped_ppa(&ppa) || !valid_ppa(zns, &ppa)) {
             continue;
@@ -286,6 +315,44 @@ static uint64_t zns_read(struct zns_ssd *zns, NvmeRequest *req)
         sublat = zns_advance_status(zns, &ppa, &srd);
         //femu_log("[R] lpn:\t%lu\t<--ch:\t%u\tlun:\t%u\tpl:\t%u\tblk:\t%u\tpg:\t%u\tsubpg:\t%u\tlat\t%lu\n",lpn,ppa.g.ch,ppa.g.fc,ppa.g.pl,ppa.g.blk,ppa.g.pg,ppa.g.spg,sublat);
         maxlat = (sublat > maxlat) ? sublat : maxlat;
+        #else
+        slot = zns->slots[lpn];
+        if(ppa_res < slot.slot_size_bs){
+            ppa = get_maptbl_ent(zns, lpn);
+            if (!mapped_ppa(&ppa) || !valid_ppa(zns, &ppa)) {
+                continue;
+            }
+            ppa_res = LOGICAL_PAGE_SIZE - slot.slot_size_bs;
+            struct nand_cmd srd;
+            srd.type = USER_IO;
+            srd.cmd = NAND_READ;
+            srd.stime = req->stime;
+    
+            sublat = zns_advance_status(zns, &ppa, &srd);
+            //femu_log("[R] lpn:\t%lu\t<--ch:\t%u\tlun:\t%u\tpl:\t%u\tblk:\t%u\tpg:\t%u\tsubpg:\t%u\tlat\t%lu\n",lpn,ppa.g.ch,ppa.g.fc,ppa.g.pl,ppa.g.blk,ppa.g.pg,ppa.g.spg,sublat);
+            maxlat = (sublat > maxlat) ? sublat : maxlat;
+        }else{
+            ppa_res -= slot.slot_size_bs;
+        }
+        #ifdef BALLOON_ZNS_RESIDUE
+            if(zns->slots[lpn].have_residue){
+                if(ppa_residue_len < zns->slots[lpn].residue_len){
+                    ppa_residue_len = LOGICAL_PAGE_SIZE - zns->slots[lpn].residue_len;
+                    struct nand_cmd srd;
+                    srd.type = USER_IO;
+                    srd.cmd = NAND_READ;
+                    srd.stime = req->stime;
+                    /* get latency statistics */
+                    struct ppa ppa_r = slot.residue_ppa;
+                    sublat = zns_advance_status(zns, &ppa_r, &srd);
+                    maxlat = (sublat > maxlat) ? sublat : maxlat;
+                    //femu_debug("zftl.c:: zns_wc_flush: slot_size_bs=%u residue sublat=%lu maxlat=%lu\n",zns->slots[lpn].slot_size_bs, sublat, maxlat);
+                }else{
+                    ppa_residue_len -= zns->slots[lpn].residue_len;
+                }
+            }
+            #endif
+        #endif
     }
 
     return maxlat;
@@ -306,9 +373,12 @@ static uint64_t zns_wc_flush(struct zns_ssd* zns, int wcidx, int type,uint64_t s
     uint64_t sublat = 0, maxlat = 0;
     #ifdef BALLOON_ZNS
     int ppa_res = 0;
+    int ppa_residue_len = 0;
     struct ppa last_ppa;
+    struct ppa last_ppa_r;
     #endif
     i = 0;
+    femu_debug("[znbc] zftl.c::zns_wc_flush wcidx=%d used=%lu stime=%lu\n", wcidx, zns->cache.write_cache[wcidx].used, stime);
     while(i < zns->cache.write_cache[wcidx].used)
     {
         for(p = 0;p<zns->num_plane;p++){
@@ -340,7 +410,7 @@ static uint64_t zns_wc_flush(struct zns_ssd* zns, int wcidx, int type,uint64_t s
                     oldppa = get_maptbl_ent(zns, lpn);
                     if (mapped_ppa(&oldppa)) {
                         /* FIXME: Misao: update old page information*/
-                        femu_debug("[znbc] zftl.c::zns_wc_flush 344: the lpn is mapped!\n");
+                        //femu_debug("[znbc] zftl.c::zns_wc_flush 344: the lpn is mapped!\n");
                     }
                     ppa.g.spg = subpage;
                     /* update maptbl */
@@ -370,7 +440,7 @@ static uint64_t zns_wc_flush(struct zns_ssd* zns, int wcidx, int type,uint64_t s
                         oldppa = get_maptbl_ent(zns, lpn);
                         if (mapped_ppa(&oldppa)) {
                             /* FIXME: Misao: update old page information*/
-                            femu_debug("[znbc] zftl.c::zns_wc_flush 344: the lpn is mapped!\n");
+                            //femu_debug("[znbc] zftl.c::zns_wc_flush 344: the lpn is mapped!\n");
                         }
                         if(map_last_ppa == true){
                             set_maptbl_ent(zns, lpn, &last_ppa);
@@ -380,15 +450,23 @@ static uint64_t zns_wc_flush(struct zns_ssd* zns, int wcidx, int type,uint64_t s
                             set_maptbl_ent(zns, lpn, &ppa);
                         #ifdef BALLOON_ZNS_RESIDUE
                         if(zns->slots[lpn].have_residue){
-                            struct nand_cmd swr;
-                            swr.type = type;
-                            swr.cmd = NAND_WRITE;
-                            swr.stime = stime;
-                            /* get latency statistics */
-                            struct ppa ppa_r = get_residue_page(zns);
-                            sublat = zns_advance_status(zns, &ppa_r, &swr);
-                            maxlat = (sublat > maxlat) ? sublat : maxlat;
-                            //femu_debug("zftl.c:: zns_wc_flush: slot_size_bs=%u residue sublat=%lu maxlat=%lu\n",zns->slots[lpn].slot_size_bs, sublat, maxlat);
+                            if(ppa_residue_len < zns->slots[lpn].residue_len){
+                                ppa_residue_len = LOGICAL_PAGE_SIZE - zns->slots[lpn].residue_len;
+                                struct nand_cmd swr;
+                                swr.type = type;
+                                swr.cmd = NAND_WRITE;
+                                swr.stime = stime;
+                                /* get latency statistics */
+                                struct ppa ppa_r = get_residue_page(zns);
+                                zns->slots[lpn].residue_ppa = ppa_r;
+                                last_ppa_r = ppa_r;
+                                sublat = zns_advance_status(zns, &ppa_r, &swr);
+                                maxlat = (sublat > maxlat) ? sublat : maxlat;
+                                //femu_debug("zftl.c:: zns_wc_flush: slot_size_bs=%u residue sublat=%lu maxlat=%lu\n",zns->slots[lpn].slot_size_bs, sublat, maxlat);
+                            }else{
+                                ppa_residue_len -= zns->slots[lpn].residue_len;
+                                zns->slots[lpn].residue_ppa = last_ppa_r;
+                            }
                         }
                         #endif
                         i++;
@@ -430,7 +508,7 @@ static uint64_t zns_wc_flush(struct zns_ssd* zns, int wcidx, int type,uint64_t s
     flush_cnt++;
     tot_maxlat += maxlat;
     avg_maxlat = tot_maxlat / flush_cnt;
-    printf("zftl.c::zns_wc_flush : maxlat = %lu flush_cnt=%lu tot_maxlat=%lu avg_maxlat=%lu get_page_cnt=%lu\n",maxlat, flush_cnt, tot_maxlat, avg_maxlat, get_page_cnt);
+    printf("[znbc] zftl.c::zns_wc_flush : maxlat = %lu flush_cnt=%lu tot_maxlat=%lu avg_maxlat=%lu get_page_cnt=%lu\n",maxlat, flush_cnt, tot_maxlat, avg_maxlat, get_page_cnt);
     #endif
     return maxlat;
 }
@@ -447,7 +525,7 @@ static uint64_t zns_write(struct zns_ssd *zns, NvmeRequest *req, FemuCtrl *n)
     int i;
     int wcidx = zns_get_wcidx(zns);
 
-    femu_debug("[znbc] zftl.c::zns_write : lba=%ld nlb=%d secs_per_pg=%ld start_lpn=%ld end_lpn=%ld \n", lba, nlb, secs_per_pg, start_lpn, end_lpn);
+    femu_debug("[znbc] zftl.c::zns_write : lba=%ld nlb=%d secs_per_pg=%ld start_lpn=%ld end_lpn=%ld active_zone=%u\n", lba, nlb, secs_per_pg, start_lpn, end_lpn, zns->active_zone);
 
     if(wcidx==-1)
     {
@@ -486,6 +564,9 @@ static uint64_t zns_write(struct zns_ssd *zns, NvmeRequest *req, FemuCtrl *n)
         maxlat = (sublat > maxlat) ? sublat : maxlat;
         // femu_log("[W] lpn:\t%lu\t-->wc cache:%u, used:%u\n",lpn,(int)wcidx,(int)zns->cache.write_cache[wcidx].used);
     }
+    #ifdef ADD_LARGE_LAT_FOR_TEST
+    maxlat += 1ull * 100000000;
+    #endif
     return maxlat;
 }
 

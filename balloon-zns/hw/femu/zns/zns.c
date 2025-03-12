@@ -108,6 +108,52 @@ static uint64_t get_subsuperblock(FemuCtrl *n, uint32_t zone_idx){
     assert(0);
     return -1;
 }
+
+static void zns_zone_additional_clear_bz(FemuCtrl *n){
+    femu_debug("[znbc] zns.c::zns_zone_additional_clear_bz clear zones for Balloon-ZNS...\n");
+    NvmeZone *zone;
+    zone = n->zone_array;
+    struct zns_ssd *zns = n->zns;
+    int i;
+    for (i = 0; i < n->num_zones; i++, zone++) {
+        zone->num_ssblk = 0;
+        zone->ssblk_idx = 0;
+        for(int j = 0; j < ZONE_SIZE_TO_PROFILING_WINDOW_SIZE_RATIO; j++){
+            memset(zone->pfwd[j].percentile_cnt, 0, sizeof(zone->pfwd[j].percentile_cnt));
+            zone->pfwd[j].len = 0;
+            zone->pfwd[j].slot_size_percentile = INITIAL_SLOT_SIZE_TO_PAGE_SIZE_PERCENTILE;
+            zone->pfwd[j].slot_size_bs = UPPER(LOGICAL_PAGE_SIZE * INITIAL_SLOT_SIZE_TO_PAGE_SIZE_PERCENTILE / 100, SLOT_SIZE_BASE);
+        }
+        #ifdef BALLOON_ZNS_RESIDUE
+        zone->num_exssblk = 0;
+        zone->exssblk_idx = 0;
+        #endif
+    }
+
+    zns->wp_bz.ch = 0;
+    #ifdef BALLOON_ZNS_RESIDUE
+    zns->now_exssblk = zns->num_ssblk - 1;
+    #endif
+
+    for(i = 0; i < zns->num_ssblk; i++){
+        if(zns->ssblk[i].used){
+            zns->ssblk[i].used = 0;
+            zns->ssblk[i].to_zone = 0;
+            zns->ssblk[i].is_ext = 0;
+            zns->ssblk[i].write_pointer = 0;
+        }
+    }
+
+    for (i = 0; i < zns->l2p_sz; i++) {
+        zns->maptbl[i].ppa = UNMAPPED_PPA;
+    }
+
+    for(i =0; i < zns->cache.num_wc; i++)
+    {
+        zns->cache.write_cache[i].sblk = i;
+        zns->cache.write_cache[i].used = 0;
+    }
+}
 #endif
 
 static void zns_init_zoned_state(NvmeNamespace *ns)
@@ -148,6 +194,7 @@ static void zns_init_zoned_state(NvmeNamespace *ns)
         zone->ssblk = g_malloc0(sizeof(u_int64_t) * SUPERBLOCK_TO_SUBSUPERBLOCK_RATIO);
         zone->ssblk_idx = 0;
         zone->pfwd = g_malloc(sizeof(ProfilingWindow) * (ZONE_SIZE_TO_PROFILING_WINDOW_SIZE_RATIO + 1));
+
         for(int j = 0; j < ZONE_SIZE_TO_PROFILING_WINDOW_SIZE_RATIO; j++){
             memset(zone->pfwd[j].percentile_cnt, 0, sizeof(zone->pfwd[j].percentile_cnt));
             zone->pfwd[j].len = 0;
@@ -215,26 +262,8 @@ static void zns_clear_zone(NvmeNamespace *ns, NvmeZone *zone)
     uint8_t state;
 
     zone->w_ptr = zone->d.wp;
-
-    #ifdef BALLOON_ZNS
-    // added by znbc
-    struct zns_ssd *zns = n->zns;
-    for(int i = 0; i < zns->num_ssblk; i++){
-        if(zns->ssblk[i].used){
-            zns->ssblk[i].used = 0;
-            zns->ssblk[i].to_zone = 0;
-            zns->ssblk[i].is_ext = 0;
-            femu_debug("[znbc] zns.c::zns_clear_zone : reset ssblk(%d).\n", i);
-        }
-    }
-    zone->num_ssblk = 0;
-    zone->ssblk_idx = 0;
-    #ifdef BALLOON_ZNS_RESIDUE
-    zone->num_exssblk = 0;
-    zone->exssblk_idx = 0;
-    #endif
-    #endif
-
+    femu_debug("[znbc] zns.c::zns_clear_zone closing zone w_ptr = %lu\n", zone->w_ptr);
+    
     state = zns_get_zone_state(zone);
     if (zone->d.wp != zone->d.zslba || (zone->d.za & NVME_ZA_ZD_EXT_VALID)) {
         if (state != NVME_ZONE_STATE_CLOSED) {
@@ -249,6 +278,7 @@ static void zns_clear_zone(NvmeNamespace *ns, NvmeZone *zone)
 
 static void zns_zoned_ns_shutdown(NvmeNamespace *ns)
 {
+    femu_debug("[znbc] zns.c::zns_zoned_ns_shutdown shutdowning...\n");
     FemuCtrl *n = ns->ctrl;
     NvmeZone *zone, *next;
 
@@ -1261,6 +1291,7 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
     }
 
     n->zns->active_zone = zns_zone_idx(ns,slba);
+    femu_debug("[znbc] zns.c::zns_nvme_rw active_zone=%u\n", n->zns->active_zone);
     return NVME_SUCCESS;
 err:
     return status | NVME_DNR;
@@ -1299,7 +1330,7 @@ static uint16_t zns_zone_mgmt_send(FemuCtrl *n, NvmeRequest *req)
     if (slba != zone->d.zslba) {
         return NVME_INVALID_FIELD | NVME_DNR;
     }
-
+    femu_debug("[znbc] zns.c::zns_zone_mgmt_send action=%u all=%d slba=%lu zone_idx=%u\n", action, all, slba, zone_idx);
     switch (action) {
     case NVME_ZONE_ACTION_OPEN:
         if (all) {
@@ -1325,6 +1356,7 @@ static uint16_t zns_zone_mgmt_send(FemuCtrl *n, NvmeRequest *req)
         if (all) {
             proc_mask = NVME_PROC_OPENED_ZONES | NVME_PROC_CLOSED_ZONES |
                 NVME_PROC_FULL_ZONES;
+            zns_zone_additional_clear_bz(n);
         }
         *resets = 1;
         status = zns_do_zone_op(ns, zone, proc_mask, zns_reset_zone, req);
@@ -1567,6 +1599,9 @@ static void zns_init_plane(struct zns_plane *plane,int num_blk,int flash_type)
         zns_init_blk(&plane->blk[i],num_blk,i,flash_type);
     }
     plane->next_plane_avail_time = 0;
+    #ifdef SHOW_EACH_PLANE_TOT_LAT
+    plane->plane_r_lat = plane->plane_w_lat = plane->plane_tot_lat = 0;
+    #endif
 }
 
 static void zns_init_fc(struct zns_fc *fc,uint8_t num_plane,uint8_t num_blk,int flash_type)
@@ -1597,7 +1632,7 @@ static void zns_init_params(FemuCtrl *n)
     id_zns->num_ch = n->zns_params.zns_num_ch;
     id_zns->num_lun = n->zns_params.zns_num_lun;
     id_zns->num_plane = n->zns_params.zns_num_plane;
-    id_zns->num_blk = n->zns_params.zns_num_blk;
+    id_zns->num_blk = n->zns_params.zns_num_blk; // nums of blks per plane
     #ifdef NUM_PAGE_256
     id_zns->num_page = 256;
     #else
@@ -1652,8 +1687,12 @@ static void zns_init_params(FemuCtrl *n)
     }
 
     //Misao: init sram
+    #ifndef ZNS_C__ZNS_INIT_PARAMS__PROGRAM_UNIT_FIX
     id_zns->program_unit = ZNS_PAGE_SIZE*id_zns->flash_type*2; //PAGE_SIZE*flash_type*2 planes
-    id_zns->stripe_uint = id_zns->program_unit*id_zns->num_ch*id_zns->num_lun;
+    #else
+    id_zns->program_unit = ZNS_PAGE_SIZE*id_zns->flash_type*id_zns->num_plane; // program unit should be 1 physical page size plus the num of plane for a lun
+    #endif
+    id_zns->stripe_uint = id_zns->program_unit*id_zns->num_ch*id_zns->num_lun; // stripe uint should be 1 physical page size plus the num of plane for a ssd
     id_zns->cache.num_wc = ZNS_DEFAULT_NUM_WRITE_CACHE;
     id_zns->cache.write_cache = g_malloc0(sizeof(struct zns_write_cache) * id_zns->cache.num_wc);
     for(i =0; i < id_zns->cache.num_wc; i++)
@@ -1716,6 +1755,12 @@ static void zns_init_params(FemuCtrl *n)
     femu_log("| use the linked slot design: \e[1;32m YES \e[0m \n"); 
     #else
     femu_log("| use the linked slot design: \e[1;31m NO \e[0m\n"); 
+    #endif
+
+    #ifdef CH_BITS3
+    femu_log("| in zns.h, change the CH_BITS to 3: \e[1;32m YES \e[0m \n"); 
+    #else
+    femu_log("| in zns.h, change the CH_BITS to 3: \e[1;31m NO \e[0m\n"); 
     #endif
 
     femu_log("===========================================\n"); 
