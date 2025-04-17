@@ -86,7 +86,7 @@ struct ppa {
     };
 };
 
-#ifndef BALLOON_ZNS
+#ifndef USE_SUBSUPERBLOCK
 //no use in Balloon-ZNS
 struct write_pointer {
     uint64_t ch;
@@ -146,6 +146,10 @@ struct zns_write_cache{
     uint64_t used; 
     uint64_t cap;
     uint64_t* lpns; //identify the cached data
+    #ifdef USE_SLOT
+    uint64_t used_size;
+    uint64_t cap_size;
+    #endif
 };
 
 struct zns_sram{
@@ -153,7 +157,7 @@ struct zns_sram{
     struct zns_write_cache* write_cache;
 };
 
-#ifdef BALLOON_ZNS
+#ifdef USE_SUBSUPERBLOCK
 /*added by znbc: sub-superblock. Give up lun level parallelism*/
 struct sub_superblock{
     bool used;
@@ -163,7 +167,9 @@ struct sub_superblock{
     uint64_t write_pointer; // record the number of physical pages written
     bool is_ext;
 };
+#endif
 
+#ifdef USE_SLOT
 struct slot_bz{
     //uint32_t pfwd;
     u_int32_t slot_size_bs;
@@ -185,7 +191,12 @@ struct zns_ssd {
 
     struct zns_ch *ch;
 
-    #ifndef BALLOON_ZNS
+    #ifdef USE_SLOT
+    struct slot_bz *slots;
+    uint64_t profiling_window_size;
+    #endif
+
+    #ifndef USE_SUBSUPERBLOCK
     struct write_pointer wp;
     #else
     /* added by znbc: for balloon-zns */
@@ -193,8 +204,7 @@ struct zns_ssd {
     struct sub_superblock * ssblk; // this records every sub-superblock
     uint64_t num_ssblk;
     uint64_t ssblk_size_limit; // size limit of sub-superblock 
-    uint64_t profiling_window_size;
-    struct slot_bz *slots;
+    
     #ifdef BALLOON_ZNS_RESIDUE
     uint64_t now_exssblk; // the extra-superblock in use. Enumerate from back to front!(eg. 63,62,...)
     #endif
@@ -307,7 +317,7 @@ typedef struct QEMU_PACKED NvmeIdNsZoned {
     uint8_t     vs[256];
 } NvmeIdNsZoned;
 
-#ifdef BALLOON_ZNS
+#ifdef USE_SLOT
 // added by znbc, profiling window for Balloon-ZNS
 typedef struct ProfilingWindow {
     uint64_t len; // current length of this profiling window
@@ -321,18 +331,23 @@ typedef struct NvmeZone {
     NvmeZoneDescr   d;
     uint64_t        w_ptr;
     QTAILQ_ENTRY(NvmeZone) entry;
-    #ifdef BALLOON_ZNS
+    #ifdef USE_SUBSUPERBLOCK
     // add by znbc
     uint64_t *ssblk;   // the idx-array of sub-superblocks mapped by this zone
     uint64_t num_ssblk; // the number of sub-superblocks mapped by this zone
     uint64_t ssblk_idx; // active sub-superblock
+    #endif
+    
+    #ifdef USE_SLOT
     ProfilingWindow *pfwd; // profiling window
+    #endif
+
     #ifdef BALLOON_ZNS_RESIDUE
     uint64_t *exssblk;  // the idx-array of extra-sub-superblocks mapped by this zone
     uint64_t num_exssblk;
     uint64_t exssblk_idx;
     #endif
-    #endif
+    
 } NvmeZone;
 
 typedef struct NvmeNamespaceParams {

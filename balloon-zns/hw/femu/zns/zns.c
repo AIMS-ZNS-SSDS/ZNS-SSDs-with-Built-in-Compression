@@ -86,7 +86,7 @@ static int zns_init_zone_geometry(NvmeNamespace *ns, Error **errp)
     return 0;
 }
 
-#ifdef BALLOON_ZNS
+#ifdef USE_SUBSUPERBLOCK
 // added by znbc, get a free sub-superblock
 static uint64_t get_subsuperblock(FemuCtrl *n, uint32_t zone_idx){
     struct zns_ssd *zns = n->zns;
@@ -108,7 +108,9 @@ static uint64_t get_subsuperblock(FemuCtrl *n, uint32_t zone_idx){
     assert(0);
     return -1;
 }
+#endif
 
+#ifdef BALLOON_ZNS
 static void zns_zone_additional_clear_bz(FemuCtrl *n){
     femu_debug("[znbc] zns.c::zns_zone_additional_clear_bz clear zones for Balloon-ZNS...\n");
     NvmeZone *zone;
@@ -116,25 +118,25 @@ static void zns_zone_additional_clear_bz(FemuCtrl *n){
     struct zns_ssd *zns = n->zns;
     int i;
     for (i = 0; i < n->num_zones; i++, zone++) {
+        #ifdef USE_SUBSUPERBLOCK
         zone->num_ssblk = 0;
         zone->ssblk_idx = 0;
+        #endif
+        #ifdef USE_SLOT
         for(int j = 0; j < ZONE_SIZE_TO_PROFILING_WINDOW_SIZE_RATIO; j++){
             memset(zone->pfwd[j].percentile_cnt, 0, sizeof(zone->pfwd[j].percentile_cnt));
             zone->pfwd[j].len = 0;
             zone->pfwd[j].slot_size_percentile = INITIAL_SLOT_SIZE_TO_PAGE_SIZE_PERCENTILE;
             zone->pfwd[j].slot_size_bs = UPPER(LOGICAL_PAGE_SIZE * INITIAL_SLOT_SIZE_TO_PAGE_SIZE_PERCENTILE / 100, SLOT_SIZE_BASE);
         }
+        #endif
         #ifdef BALLOON_ZNS_RESIDUE
         zone->num_exssblk = 0;
         zone->exssblk_idx = 0;
         #endif
     }
-
+    #ifdef USE_SUBSUPERBLOCK
     zns->wp_bz.ch = 0;
-    #ifdef BALLOON_ZNS_RESIDUE
-    zns->now_exssblk = zns->num_ssblk - 1;
-    #endif
-
     for(i = 0; i < zns->num_ssblk; i++){
         if(zns->ssblk[i].used){
             zns->ssblk[i].used = 0;
@@ -143,6 +145,11 @@ static void zns_zone_additional_clear_bz(FemuCtrl *n){
             zns->ssblk[i].write_pointer = 0;
         }
     }
+    #ifdef BALLOON_ZNS_RESIDUE
+    zns->now_exssblk = zns->num_ssblk - 1;
+    #endif
+
+    #endif
 
     for (i = 0; i < zns->l2p_sz; i++) {
         zns->maptbl[i].ppa = UNMAPPED_PPA;
@@ -188,11 +195,14 @@ static void zns_init_zoned_state(NvmeNamespace *ns)
         zone->w_ptr = start;
         start += zone_size;
         
-        #ifdef BALLOON_ZNS
+        #ifdef USE_SUBSUPERBLOCK
         // added by znbc, init the sub-superblocks mapped by each zone
         zone->num_ssblk = 0;
         zone->ssblk = g_malloc0(sizeof(u_int64_t) * SUPERBLOCK_TO_SUBSUPERBLOCK_RATIO);
         zone->ssblk_idx = 0;
+        #endif
+
+        #ifdef USE_SLOT
         zone->pfwd = g_malloc(sizeof(ProfilingWindow) * (ZONE_SIZE_TO_PROFILING_WINDOW_SIZE_RATIO + 1));
 
         for(int j = 0; j < ZONE_SIZE_TO_PROFILING_WINDOW_SIZE_RATIO; j++){
@@ -201,11 +211,12 @@ static void zns_init_zoned_state(NvmeNamespace *ns)
             zone->pfwd[j].slot_size_percentile = INITIAL_SLOT_SIZE_TO_PAGE_SIZE_PERCENTILE;
             zone->pfwd[j].slot_size_bs = UPPER(LOGICAL_PAGE_SIZE * INITIAL_SLOT_SIZE_TO_PAGE_SIZE_PERCENTILE / 100, SLOT_SIZE_BASE);
         }
+        #endif
+
         #ifdef BALLOON_ZNS_RESIDUE
         zone->num_exssblk = 0;
         zone->exssblk = g_malloc0(sizeof(u_int64_t) * SUPERBLOCK_TO_SUBSUPERBLOCK_RATIO);
         zone->exssblk_idx = 0;
-        #endif
         #endif
     }
 
@@ -598,7 +609,7 @@ static uint64_t zns_advance_zone_wp(NvmeNamespace *ns, NvmeZone *zone, uint32_t 
 
     zone->w_ptr += nlb;
 
-    #ifdef BALLOON_ZNS
+    #ifdef USE_SUBSUPERBLOCK
     // add by znbc
     femu_debug("[znbc] zns.c::zns_advance_zone_wp zone->w_ptr-zone->d.zslba=%ld-%ld=%ld  zone->num_ssblk=%ld ns->ctrl->zone_size=%ld next_limit=%ld\n",zone->w_ptr, zone->d.zslba, zone->w_ptr - zone->d.zslba, zone->num_ssblk, ns->ctrl->zone_size, zone->num_ssblk * ns->ctrl->zone_size / SUPERBLOCK_TO_SUBSUPERBLOCK_RATIO);
     if(zone->w_ptr - zone->d.zslba > zone->num_ssblk * ns->ctrl->zone_size / SUPERBLOCK_TO_SUBSUPERBLOCK_RATIO){
@@ -959,7 +970,7 @@ static uint16_t zns_map_dptr(FemuCtrl *n, size_t len, NvmeRequest *req)
     }
 }
 
-#ifdef BALLOON_ZNS
+#ifdef USE_SLOT
 // added by znbc, get profiling window id by start lba
 static inline uint32_t zns_get_pfwd_id_by_slba(NvmeNamespace *ns, uint64_t slba)
 {
@@ -1009,7 +1020,7 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
     NvmeZone *zone;
     zone = zns_get_zone_by_slba(ns, slba);
 
-    #ifdef BALLOON_ZNS
+    #ifdef USE_SLOT
     // added by znbc
     uint32_t pfwd_id = zns_get_pfwd_id_by_slba(ns, slba);
     femu_debug("[znbc] zns.c::zns_nvme_rw : pfwd_id = %d\n", pfwd_id);
@@ -1087,7 +1098,7 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
         u_int64_t len = req->qsg.sg[0].len; 
         int nsg = req->qsg.nsg;
         femu_debug("[znbc] zns.c::zns_nvme_rw : sg[0].len = %lu sg[1].len = %lu sg[2].len = %lu, nsg = %d\n", req->qsg.sg[0].len, req->qsg.sg[1].len, req->qsg.sg[2].len, req->qsg.nsg);
-        #ifdef BALLOON_ZNS
+        #ifdef USE_SLOT
         femu_debug("[znbc] zns.c::zns_nvme_rw : pwd_size = %lu mb_oft=%lu\n", n->zns->profiling_window_size, mb_oft_2);
         #endif
         //qat_dc_compress(n,0,mb_2+mb_oft_2,req->qsg.sg[0].len, req->compressed_size,req->qsg.nsg);
@@ -1109,7 +1120,7 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
         #endif
 
         //femu_debug("qat_dc_compress over!\n");
-        #ifdef BALLOON_ZNS
+        #ifdef USE_SLOT
 
         #ifdef SG_LEN_EQU_LOGICAL_PAGE_SIZE
         // for some reason the rocksdb have inputs which sg.len != 4096, I forcefully expanded them to 4096 here, there may be other better ways...
@@ -1161,7 +1172,7 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
         printf("\n");
         #endif
 
-        #ifdef BALLOON_ZNS
+        #ifdef USE_SLOT
         assert(len == LOGICAL_PAGE_SIZE); // So that the nsg is the number of logical pages.(Not necessary. If not, the codes below may need change).
         uint64_t secs_per_pg = LOGICAL_PAGE_SIZE/n->zns->lbasz;
         uint64_t start_lpn = slba / secs_per_pg;
@@ -1356,7 +1367,9 @@ static uint16_t zns_zone_mgmt_send(FemuCtrl *n, NvmeRequest *req)
         if (all) {
             proc_mask = NVME_PROC_OPENED_ZONES | NVME_PROC_CLOSED_ZONES |
                 NVME_PROC_FULL_ZONES;
+            #ifdef BALLOON_ZNS
             zns_zone_additional_clear_bz(n);
+            #endif
         }
         *resets = 1;
         status = zns_do_zone_op(ns, zone, proc_mask, zns_reset_zone, req);
@@ -1649,7 +1662,7 @@ static void zns_init_params(FemuCtrl *n)
     femu_debug("[znbc] zns.c::zns_init_params : num_ch=%ld num_lun=%ld num_plane=%ld num_blk=%ld num_page=%ld, lbasz=%d flash_type=%d\n",\
     id_zns->num_ch, id_zns->num_lun, id_zns->num_plane, id_zns->num_blk, id_zns->num_page, id_zns->lbasz, id_zns->flash_type); // Can be seen at the top area of build-femu/log.
     
-    #ifndef BALLOON_ZNS
+    #ifndef USE_SUBSUPERBLOCK
     id_zns->wp.ch = 0;
     id_zns->wp.lun = 0;
     #else
@@ -1667,18 +1680,23 @@ static void zns_init_params(FemuCtrl *n)
         id_zns->ssblk[i].blk = i / SUPERBLOCK_TO_SUBSUPERBLOCK_RATIO;
         id_zns->ssblk[i].write_pointer = 0;
     }
-    id_zns->profiling_window_size = id_zns->num_ch * id_zns->num_lun * id_zns->num_plane * id_zns->num_page \
-    * ZNS_PAGE_SIZE / ZONE_SIZE_TO_PROFILING_WINDOW_SIZE_RATIO;
     #ifdef BALLOON_ZNS_RESIDUE
     id_zns->now_exssblk = id_zns->num_ssblk - 1;
     #endif
     
     #endif
 
+    #ifdef USE_SLOT
+    id_zns->profiling_window_size = id_zns->num_ch * id_zns->num_lun * id_zns->num_plane * id_zns->num_page \
+    * ZNS_PAGE_SIZE / ZONE_SIZE_TO_PROFILING_WINDOW_SIZE_RATIO;
+    #endif
+
+
+    
     //Misao: init mapping table
     id_zns->l2p_sz = n->ns_size/LOGICAL_PAGE_SIZE;
     id_zns->maptbl = g_malloc0(sizeof(struct ppa) * id_zns->l2p_sz);
-    #ifdef BALLOON_ZNS
+    #ifdef USE_SLOT
     id_zns->slots = g_malloc0(sizeof(struct slot_bz) * id_zns->l2p_sz);
     #endif 
     femu_debug("[znbc] zns.c::zns_init_params : n->ns_size=%lu zns->l2p_sz=%lu\n", n->ns_size, id_zns->l2p_sz);
@@ -1700,6 +1718,11 @@ static void zns_init_params(FemuCtrl *n)
         id_zns->cache.write_cache[i].sblk = i;
         id_zns->cache.write_cache[i].used = 0;
         id_zns->cache.write_cache[i].cap = (id_zns->stripe_uint/LOGICAL_PAGE_SIZE);
+        #ifdef USE_SLOT
+        id_zns->cache.write_cache[i].cap *= WRITE_CACHE_EXPANSION_RATIO;
+        id_zns->cache.write_cache[i].cap_size = id_zns->stripe_uint;
+        id_zns->cache.write_cache[i].used_size = 0;
+        #endif
         id_zns->cache.write_cache[i].lpns = g_malloc0(sizeof(uint64_t) * id_zns->cache.write_cache[i].cap);
     }
 
@@ -1727,6 +1750,18 @@ static void zns_init_params(FemuCtrl *n)
     femu_log("===========================================\n"); 
     femu_log("| About Balloon-ZNS mode selection:\n"); 
     
+    #ifdef USE_SUBSUPERBLOCK
+    femu_log("| Use subsuperblock: \e[1;32m YES \e[0m \n"); 
+    #else
+    femu_log("| Use subsuperblock: \e[1;31m NO \e[0m \n"); 
+    #endif
+
+    #ifdef USE_SLOT
+    femu_log("| Use slot: \e[1;32m YES \e[0m \n"); 
+    #else
+    femu_log("| Use slot: \e[1;31m NO \e[0m \n"); 
+    #endif
+
     #ifdef BALLOON_ZNS_RESIDUE
     femu_log("| Handle residue: \e[1;32m YES \e[0m \n"); 
     #else
@@ -1737,6 +1772,12 @@ static void zns_init_params(FemuCtrl *n)
     femu_log("| make the sg length equal to logical page size(not a good choice): \e[1;32m YES \e[0m \n"); 
     #else
     femu_log("| make the sg length equal to logical page size(not a good choice): \e[1;31m NO \e[0m\n"); 
+    #endif
+
+    #ifdef QAT_LATENCY
+    femu_log("| Consider QAT_LATENCY: \e[1;32m YES \e[0m \n"); 
+    #else
+    femu_log("| Consider QAT_LATENCY: \e[1;31m NO \e[0m\n"); 
     #endif
 
     #ifdef NUM_PAGE_256

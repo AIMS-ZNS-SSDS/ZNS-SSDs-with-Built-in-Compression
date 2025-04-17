@@ -8,6 +8,16 @@ femu: https://github.com/MoatLab/FEMU
 
 zns文件夹下的mode-selection.h中，COMPQAT和NO_FUNC是用于开启压缩功能的宏，FEMU_DEBUG_NVME用于输出一些中间结果。
 
+关于**qat**，我们代码在主文件夹下的meson.build有如下内容：
+
+```
+# added by zwl qat
+  qat_deps = [cc.find_library('qat_s', dirs: '/home/weipanyue/femu-original/hw/femu/zns/qat/')]
+  qat_deps += cc.find_library('usdm_drv_s', dirs: '/home/weipanyue/femu-original/hw/femu/zns/qat/')
+```
+
+会依赖服务器中wpy师姐的代码。 在实验室服务器外要使用时这里必须改动。 详细不在此记录, 请询问wpy师姐.
+
 ## fio
 
 fio官方github：[axboe/fio: Flexible I/O Tester](https://github.com/axboe/fio)

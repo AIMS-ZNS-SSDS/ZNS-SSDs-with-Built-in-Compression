@@ -51,7 +51,7 @@ static inline void check_addr(int a, int max)
    assert(a >= 0 && a < max);
 }
 
-#ifndef BALLOON_ZNS
+#ifndef USE_SUBSUPERBLOCK
 // no use in Balloon-ZNS
 static void zns_advance_write_pointer(struct zns_ssd *zns)
 {
@@ -105,8 +105,8 @@ static uint64_t zns_advance_status(struct zns_ssd *zns, struct ppa *ppa,struct n
 
     //plane level parallism
     struct zns_plane *pl = get_plane(zns, ppa);
-    femu_debug("[znbc] zftl.c::zns_advance_status plane-test pl = %#lx next_plane_avail_time = %lu req_stime = %lu\n", (unsigned long long)(pl), pl->next_plane_avail_time, req_stime);
-    femu_debug("[znbc] zftl.c::zns_advance_status ppa: ppa = %#lx ch=%lu fc=%lu plane=%lu bk=%lu spg=%lu pg=%lu\n", ppa->ppa, ppa->g.ch, ppa->g.fc, ppa->g.pl, ppa->g.blk, ppa->g.spg, ppa->g.pg);
+    femu_debug("[znbc] zftl.c::zns_advance_status plane-test pl = %#llx next_plane_avail_time = %lu req_stime = %lu\n", (unsigned long long)(pl), pl->next_plane_avail_time, req_stime);
+    femu_debug("[znbc] zftl.c::zns_advance_status ppa: ppa = %#lx ch=%u fc=%u plane=%u bk=%u spg=%u pg=%u\n", ppa->ppa, ppa->g.ch, ppa->g.fc, ppa->g.pl, ppa->g.blk, ppa->g.spg, ppa->g.pg);
     uint64_t lat = 0;
     int nand_type = get_blk(zns,ppa)->nand_type;
 
@@ -120,7 +120,7 @@ static uint64_t zns_advance_status(struct zns_ssd *zns, struct ppa *ppa,struct n
                      pl->next_plane_avail_time;
         pl->next_plane_avail_time = nand_stime + read_delay;
         lat = pl->next_plane_avail_time - req_stime;
-        #ifdef COMPQAT
+        #ifdef QAT_LATENCY
         lat += QAT_DECOMPRESSION_LATENCY_NS;
         #endif
         #ifdef SHOW_EACH_PLANE_TOT_LAT
@@ -134,7 +134,7 @@ static uint64_t zns_advance_status(struct zns_ssd *zns, struct ppa *ppa,struct n
 		            pl->next_plane_avail_time;
 	    pl->next_plane_avail_time = nand_stime + write_delay;
 	    lat = pl->next_plane_avail_time - req_stime;
-        #ifdef COMPQAT
+        #ifdef QAT_LATENCY
         lat += QAT_COMPRESSION_LATENCY_NS;
         #endif
         #ifdef SHOW_EACH_PLANE_TOT_LAT
@@ -157,9 +157,9 @@ static uint64_t zns_advance_status(struct zns_ssd *zns, struct ppa *ppa,struct n
         /* To silent warnings */
         ;
     }
-    femu_debug("[znbc] zftl.c::zns_advance_status plane-test new next_plane_avail_time = %llu, req_stime = %llu, lat = %llu\n", pl->next_plane_avail_time, req_stime, lat);
+    femu_debug("[znbc] zftl.c::zns_advance_status plane-test new next_plane_avail_time = %lu, req_stime = %lu, lat = %lu\n", pl->next_plane_avail_time, req_stime, lat);
     #ifdef SHOW_EACH_PLANE_TOT_LAT
-    femu_debug("[znbc] zftl.c::zns_advance_status: plant_[%#llx] tot_lat = %llu r_lat = %llu w_lat = %llu\n", (unsigned long long)(pl), pl->plane_tot_lat, pl->plane_r_lat, pl->plane_w_lat);
+    femu_debug("[znbc] zftl.c::zns_advance_status: plant_[%#llx] tot_lat = %lu r_lat = %lu w_lat = %lu\n", (unsigned long long)(pl), pl->plane_tot_lat, pl->plane_r_lat, pl->plane_w_lat);
     #endif
     return lat;
 }
@@ -185,7 +185,7 @@ static inline bool mapped_ppa(struct ppa *ppa)
     return !(ppa->ppa == UNMAPPED_PPA);
 }
 
-#ifndef BALLOON_ZNS
+#ifndef USE_SUBSUPERBLOCK
 static struct ppa get_new_page(struct zns_ssd *zns)
 {
     struct write_pointer *wpp = &zns->wp;
@@ -204,7 +204,7 @@ static struct ppa get_new_page(struct zns_ssd *zns)
 }
 #endif
 
-#ifdef BALLOON_ZNS
+#ifdef USE_SUBSUPERBLOCK
 // add by znbc
 static struct ppa get_new_page_bz(struct zns_ssd *zns, FemuCtrl *n)
 {
@@ -241,6 +241,7 @@ static struct ppa get_new_page_bz(struct zns_ssd *zns, FemuCtrl *n)
 
 static struct ppa get_residue_page(struct zns_ssd *zns){
     struct ppa ppa;
+    #ifdef USE_SUBSUPERBLOCK
     struct write_pointer_bz *wpp = &zns->wp_bz;
     u_int64_t exssblk = zns->now_exssblk;
     //femu_debug("zftl.c::get_residue_page: exssblk=%lu\n", exssblk);
@@ -262,6 +263,9 @@ static struct ppa get_residue_page(struct zns_ssd *zns){
         ftl_err("[Misao] invalid ppa: ch %u lun %u pl %u blk %u pg %u subpg  %u \n",ppa.g.ch,ppa.g.fc,ppa.g.pl,ppa.g.blk,ppa.g.pg,ppa.g.spg);
         ppa.ppa = UNMAPPED_PPA;
     }
+    #else
+    ppa = get_new_page(zns);
+    #endif
     return ppa;
 }
 
@@ -291,9 +295,12 @@ static uint64_t zns_read(struct zns_ssd *zns, NvmeRequest *req)
     struct ppa ppa;
     uint64_t lpn;
     uint64_t sublat, maxlat = 0;
-    #ifdef BALLOON_ZNS
+    #ifdef USE_SLOT
     struct slot_bz slot;
     int ppa_res = 0;
+    #endif
+
+    #ifdef BALLOON_ZNS_RESIDUE
     int ppa_residue_len = 0;
     #endif
     
@@ -301,7 +308,7 @@ static uint64_t zns_read(struct zns_ssd *zns, NvmeRequest *req)
 
     /* normal IO read path */
     for (lpn = start_lpn; lpn <= end_lpn; lpn++) {
-        #ifndef BALLOON_ZNS
+        #ifndef USE_SLOT
         ppa = get_maptbl_ent(zns, lpn);
         if (!mapped_ppa(&ppa) || !valid_ppa(zns, &ppa)) {
             continue;
@@ -371,7 +378,7 @@ static uint64_t zns_wc_flush(struct zns_ssd* zns, int wcidx, int type,uint64_t s
     uint64_t lpn;
     int flash_type = zns->flash_type;
     uint64_t sublat = 0, maxlat = 0;
-    #ifdef BALLOON_ZNS
+    #ifdef USE_SLOT
     int ppa_res = 0;
     int ppa_residue_len = 0;
     struct ppa last_ppa;
@@ -383,18 +390,18 @@ static uint64_t zns_wc_flush(struct zns_ssd* zns, int wcidx, int type,uint64_t s
     {
         for(p = 0;p<zns->num_plane;p++){
             /* new write */
-            #ifndef BALLOON_ZNS
+            #ifndef USE_SUBSUPERBLOCK
             ppa = get_new_page(zns);
             #else
             ppa = get_new_page_bz(zns, n);
             #endif
-
+            
             #ifdef SHOW_FLUSH_MAXLAT
             get_page_cnt++;
             #endif
             ppa.g.pl = p;
 
-            #ifndef BALLOON_ZNS
+            #ifndef USE_SLOT
             for(j = 0; j < flash_type ;j++)
             {
                 ppa.g.pg = get_blk(zns,&ppa)->page_wp;
@@ -418,6 +425,11 @@ static uint64_t zns_wc_flush(struct zns_ssd* zns, int wcidx, int type,uint64_t s
                     //femu_log("[F] lpn:\t%lu\t-->ch:\t%u\tlun:\t%u\tpl:\t%u\tblk:\t%u\tpg:\t%u\tsubpg:\t%u\tlat\t%lu\n",lpn,ppa.g.ch,ppa.g.fc,ppa.g.pl,ppa.g.blk,ppa.g.pg,ppa.g.spg,sublat);
                 }
                 i+=ZNS_PAGE_SIZE/LOGICAL_PAGE_SIZE;
+                if(i >= zns->cache.write_cache[wcidx].used)
+                {
+                    //No need to write an invalid page
+                    break;
+                }
             }
             #else
             for(j = 0; j < flash_type ;j++)
@@ -481,6 +493,10 @@ static uint64_t zns_wc_flush(struct zns_ssd* zns, int wcidx, int type,uint64_t s
                     //femu_log("[F] lpn:\t%lu\t-->ch:\t%u\tlun:\t%u\tpl:\t%u\tblk:\t%u\tpg:\t%u\tsubpg:\t%u\tlat\t%lu\n",lpn,ppa.g.ch,ppa.g.fc,ppa.g.pl,ppa.g.blk,ppa.g.pg,ppa.g.spg,sublat);
                 }
                 //i+=ZNS_PAGE_SIZE/LOGICAL_PAGE_SIZE;
+                if(i >= zns->cache.write_cache[wcidx].used){
+                    //No need to write an invalid page
+                    break;
+                }
             }
             #endif
 
@@ -497,13 +513,14 @@ static uint64_t zns_wc_flush(struct zns_ssd* zns, int wcidx, int type,uint64_t s
             }
         }
         /* need to advance the write pointer here */
-        #ifndef BALLOON_ZNS
+        #ifndef USE_SUBSUPERBLOCK
         zns_advance_write_pointer(zns);
         #else
         zns_advance_write_pointer_bz(zns);
         #endif
     }
     zns->cache.write_cache[wcidx].used = 0;
+    zns->cache.write_cache[wcidx].used_size = 0;
     #ifdef SHOW_FLUSH_MAXLAT
     flush_cnt++;
     tot_maxlat += maxlat;
@@ -551,7 +568,7 @@ static uint64_t zns_write(struct zns_ssd *zns, NvmeRequest *req, FemuCtrl *n)
     }
 
     for (lpn = start_lpn; lpn <= end_lpn; lpn++) {
-        if(zns->cache.write_cache[wcidx].used==zns->cache.write_cache[wcidx].cap)
+        if(zns->cache.write_cache[wcidx].used==zns->cache.write_cache[wcidx].cap || zns->cache.write_cache[wcidx].used_size > zns->cache.write_cache[wcidx].cap_size - LOGICAL_PAGE_SIZE)
         {
             femu_log("[W] flush wc %d (%u/%u)\n",wcidx,(int)zns->cache.write_cache[wcidx].used,(int)zns->cache.write_cache[wcidx].cap);
             sublat = zns_wc_flush(zns,wcidx,USER_IO,req->stime,n);
@@ -560,6 +577,7 @@ static uint64_t zns_write(struct zns_ssd *zns, NvmeRequest *req, FemuCtrl *n)
             sublat = 0;
         }
         zns->cache.write_cache[wcidx].lpns[zns->cache.write_cache[wcidx].used++]=lpn;
+        zns->cache.write_cache[wcidx].used_size += zns->slots[lpn].slot_size_bs;
         sublat += SRAM_WRITE_LATENCY_NS; //Simplified timing emulation
         maxlat = (sublat > maxlat) ? sublat : maxlat;
         // femu_log("[W] lpn:\t%lu\t-->wc cache:%u, used:%u\n",lpn,(int)wcidx,(int)zns->cache.write_cache[wcidx].used);
