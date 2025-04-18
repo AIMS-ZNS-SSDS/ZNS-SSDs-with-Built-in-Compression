@@ -123,12 +123,24 @@ static void zns_zone_additional_clear_bz(FemuCtrl *n){
         zone->ssblk_idx = 0;
         #endif
         #ifdef USE_SLOT
+        #ifdef COMP_ADAPTIVE_SLOTTING
         for(int j = 0; j < ZONE_SIZE_TO_PROFILING_WINDOW_SIZE_RATIO; j++){
             memset(zone->pfwd[j].percentile_cnt, 0, sizeof(zone->pfwd[j].percentile_cnt));
             zone->pfwd[j].len = 0;
             zone->pfwd[j].slot_size_percentile = INITIAL_SLOT_SIZE_TO_PAGE_SIZE_PERCENTILE;
             zone->pfwd[j].slot_size_bs = UPPER(LOGICAL_PAGE_SIZE * INITIAL_SLOT_SIZE_TO_PAGE_SIZE_PERCENTILE / 100, SLOT_SIZE_BASE);
         }
+        #endif
+
+        #ifdef IncPFWD_NoRes
+        for(int j = 0; j < zone->pfwd_maxcnt; j++){
+            zone->pfwd[j].len = 0;
+            zone->pfwd[j].slot_size_bs = 0;
+        }
+        zone->pfwd_cnt = 0;
+        zone->last_pfwd = 0;
+        #endif
+
         #endif
         #ifdef BALLOON_ZNS_RESIDUE
         zone->num_exssblk = 0;
@@ -203,9 +215,18 @@ static void zns_init_zoned_state(NvmeNamespace *ns)
         #endif
 
         #ifdef USE_SLOT
-        zone->pfwd = g_malloc(sizeof(ProfilingWindow) * (ZONE_SIZE_TO_PROFILING_WINDOW_SIZE_RATIO + 1));
 
-        for(int j = 0; j < ZONE_SIZE_TO_PROFILING_WINDOW_SIZE_RATIO; j++){
+        #if !defined(IncPFWD_NoRes)
+        zone->pfwd = g_malloc(sizeof(ProfilingWindow) * (ZONE_SIZE_TO_PROFILING_WINDOW_SIZE_RATIO + 1));
+        zone->pfwd_maxcnt = ZONE_SIZE_TO_PROFILING_WINDOW_SIZE_RATIO;
+        #else
+        zone->pfwd = g_malloc(sizeof(ProfilingWindow) * (LOGICAL_PAGE_SIZE / SLOT_SIZE_BASE + 1));
+        zone->pfwd_maxcnt = LOGICAL_PAGE_SIZE / SLOT_SIZE_BASE;
+        zone->pfwd_cnt = 0;
+        zone->last_pfwd = 0;
+        #endif
+
+        for(int j = 0; j < zone->pfwd_maxcnt; j++){
             memset(zone->pfwd[j].percentile_cnt, 0, sizeof(zone->pfwd[j].percentile_cnt));
             zone->pfwd[j].len = 0;
             zone->pfwd[j].slot_size_percentile = INITIAL_SLOT_SIZE_TO_PAGE_SIZE_PERCENTILE;
@@ -972,6 +993,7 @@ static uint16_t zns_map_dptr(FemuCtrl *n, size_t len, NvmeRequest *req)
 
 #ifdef USE_SLOT
 // added by znbc, get profiling window id by start lba
+#if !defined(IncPFWD_NoRes)
 static inline uint32_t zns_get_pfwd_id_by_slba(NvmeNamespace *ns, uint64_t slba)
 {
     FemuCtrl *n = ns->ctrl;
@@ -979,6 +1001,28 @@ static inline uint32_t zns_get_pfwd_id_by_slba(NvmeNamespace *ns, uint64_t slba)
     uint64_t zslba = zone_slba(n, zone_idx);
     return (slba - zslba) / (n->zone_size / ZONE_SIZE_TO_PROFILING_WINDOW_SIZE_RATIO);
 }
+#else
+static inline uint32_t zns_get_pfwd_id_by_slba(NvmeNamespace *ns, uint64_t slba, bool write)
+{
+    FemuCtrl *n = ns->ctrl;
+    uint32_t zone_idx = zns_zone_idx(ns, slba);
+    uint64_t zslba = zone_slba(n, zone_idx);
+    NvmeZone zone = n->zone_array[zone_idx];
+    if(!write){
+        uint64_t delta = slba - zslba;
+        int i = 0;
+        for(; i < zone.pfwd_cnt; i++){
+            if(delta < zone.pfwd[i].len){
+                break;
+            }
+            delta -= zone.pfwd[i].len;
+        }
+        return i;
+    }
+    return zone.last_pfwd;
+}
+#endif
+
 #endif
 
 #ifdef RESIDUE_NUMBER_COUNT
@@ -1022,7 +1066,7 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
 
     #ifdef USE_SLOT
     // added by znbc
-    uint32_t pfwd_id = zns_get_pfwd_id_by_slba(ns, slba);
+    uint32_t pfwd_id = zns_get_pfwd_id_by_slba(ns, slba, req->is_write);
     femu_debug("[znbc] zns.c::zns_nvme_rw : pfwd_id = %d\n", pfwd_id);
     //uint64_t ssp = zone->pfwd[pfwd_id].slot_size_percentile ? zone->pfwd[pfwd_id].slot_size_percentile : INITIAL_SLOT_SIZE_TO_PAGE_SIZE_PERCENTILE;
     #endif
@@ -1097,7 +1141,7 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
         // znbc: the len of sg may be different (eg. when doing rocksdb test)
         u_int64_t len = req->qsg.sg[0].len; 
         int nsg = req->qsg.nsg;
-        femu_debug("[znbc] zns.c::zns_nvme_rw : sg[0].len = %lu sg[1].len = %lu sg[2].len = %lu, nsg = %d\n", req->qsg.sg[0].len, req->qsg.sg[1].len, req->qsg.sg[2].len, req->qsg.nsg);
+        femu_debug("[znbc] zns.c::zns_nvme_rw : sg[0].len = %lu sg[1].len = %lu sg[2].len = %lu, nsg = %d slba = %lu nlb = %u\n", req->qsg.sg[0].len, req->qsg.sg[1].len, req->qsg.sg[2].len, req->qsg.nsg, slba, nlb);
         #ifdef USE_SLOT
         femu_debug("[znbc] zns.c::zns_nvme_rw : pwd_size = %lu mb_oft=%lu\n", n->zns->profiling_window_size, mb_oft_2);
         #endif
@@ -1128,12 +1172,38 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
         if(len != LOGICAL_PAGE_SIZE)
             len = LOGICAL_PAGE_SIZE;
         #endif
+        uint64_t comp_tot_size = 0;
+        for(int i = 0; i < nsg; i++){
+            comp_tot_size += req->compressed_size[i];
+        }
+        
+        #ifdef IncPFWD_NoRes
+        int max_comp_size = 0;
+        for(int j = 0; j < nsg; j++){
+            if(req->compressed_size[j] > max_comp_size)
+                max_comp_size = req->compressed_size[j];
+        }
+        ProfilingWindow *pfwd = &zone->pfwd[pfwd_id];
+        if(pfwd->slot_size_bs == 0){
+            pfwd->slot_size_bs = UPPER(max_comp_size, SLOT_SIZE_BASE);
+        }else if(pfwd->slot_size_bs < max_comp_size){
+            pfwd_id++;
+            pfwd = &zone->pfwd[pfwd_id];
+            pfwd->slot_size_bs = UPPER(max_comp_size, SLOT_SIZE_BASE);
+            zone->last_pfwd = pfwd_id;
+            zone->pfwd_cnt++;
+            femu_debug("[znbc] IncPFWD_NoRes zns.c::zns_nvme_rw : zone->pfwd[%u].slot_size_bs = %u\n", pfwd_id, zone->pfwd[pfwd_id].slot_size_bs);
+        }
+        #endif
 
+        zone->pfwd[pfwd_id].len += comp_tot_size;
+
+        #ifdef COMP_ADAPTIVE_SLOTTING
         // added by znbc, update the profiling window
         for(int j = 0; j < nsg; j++){
             zone->pfwd[pfwd_id].percentile_cnt[req->compressed_size[j] * 100 / len] ++;
         }
-        zone->pfwd[pfwd_id].len += len * nsg;
+        
         if(zone->pfwd[pfwd_id].len >= n->zns->profiling_window_size){
             // calculate the slot size
             uint64_t cnt = 0, tot = n->zns->profiling_window_size / len;
@@ -1165,6 +1235,8 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
         }
         #endif
 
+        #endif
+
         #ifdef FEMU_DEBUG_NVME
         printf("zns.c::zns_nvme_rw : compressed_size: ");
         for(int j=0;j<nsg;j++)
@@ -1178,10 +1250,17 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
         uint64_t start_lpn = slba / secs_per_pg;
         uint64_t end_lpn = (slba + nlb - 1) / secs_per_pg;
         femu_debug("[znbc] zns.c::zns_nvme_rw : slba=%ld nlb=%d secs_per_pg=%ld start_lpn=%ld end_lpn=%ld \n", slba, nlb, secs_per_pg, start_lpn, end_lpn);
-        for (uint64_t lpn = start_lpn, i = 0; lpn <= end_lpn; lpn++, i++){
+        for (uint64_t lpn = start_lpn, i = 0; lpn < end_lpn; lpn++, i++){
             struct slot_bz *slot = &n->zns->slots[lpn];
             slot->slot_size_bs = zone->pfwd[pfwd_id].slot_size_bs;
             slot->have_residue = (req->compressed_size[i] > zone->pfwd[pfwd_id].slot_size_bs) ? true :false;
+            #ifdef IncPFWD_NoRes
+            if(slot->have_residue == true){
+                femu_debug("[znbc] zns.c::zns_nvme_rw : IncPFWD_NoRes method error! zone->pfwd[%u].slot_size_bs=%u req->compressed_size[%d]=%u\n", pfwd_id, zone->pfwd[pfwd_id].slot_size_bs, i, req->compressed_size[i]);
+                assert(0);
+            }
+            #endif
+
             #ifdef RESIDUE_NUMBER_COUNT
             if(slot->have_residue == true) have_residue++;
             count_slot++;
@@ -1760,6 +1839,12 @@ static void zns_init_params(FemuCtrl *n)
     femu_log("| Use slot: \e[1;32m YES \e[0m \n"); 
     #else
     femu_log("| Use slot: \e[1;31m NO \e[0m \n"); 
+    #endif
+
+    #ifdef IncPFWD_NoRes
+    femu_log("| Use IncPFWD_NoRes method: \e[1;32m YES \e[0m \n"); 
+    #else
+    femu_log("| Use IncPFWD_NoRes method: \e[1;31m NO \e[0m \n"); 
     #endif
 
     #ifdef BALLOON_ZNS_RESIDUE

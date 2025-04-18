@@ -10,10 +10,13 @@
 #define IncPFWD_NoRes
 #ifdef BALLOON_ZNS
     #define USE_SLOT
-    #define USE_SUBSUPERBLOCK // an idea in Balloon-ZNS
+    #if !defined(IncPFWD_NoRes)
+        #define USE_SUBSUPERBLOCK // an idea in Balloon-ZNS
+        #define COMP_ADAPTIVE_SLOTTING // an idea in Balloon-ZNS
+        #endif
 #endif
 
-#ifdef USE_SLOT
+#if defined(USE_SLOT) && !defined(IncPFWD_NoRes)
     #define BALLOON_ZNS_RESIDUE // this should always be open after relevant code is completed
 #endif
 

@@ -320,7 +320,7 @@ typedef struct QEMU_PACKED NvmeIdNsZoned {
 #ifdef USE_SLOT
 // added by znbc, profiling window for Balloon-ZNS
 typedef struct ProfilingWindow {
-    uint64_t len; // current length of this profiling window
+    uint64_t len; // current length of this profiling window (bytes)
     uint64_t percentile_cnt[101]; // counts of different compressed-page-size to page-size percentile
     uint32_t slot_size_percentile;
     uint32_t slot_size_bs; // bytes. base is 256B (SLOT_SIZE_BASE in zns.h)
@@ -340,6 +340,12 @@ typedef struct NvmeZone {
     
     #ifdef USE_SLOT
     ProfilingWindow *pfwd; // profiling window
+    uint32_t pfwd_maxcnt; // max count of profiling window
+    #if defined(IncPFWD_NoRes)
+    uint32_t pfwd_cnt; // current count of profiling window
+    uint32_t last_pfwd;
+    #endif
+
     #endif
 
     #ifdef BALLOON_ZNS_RESIDUE

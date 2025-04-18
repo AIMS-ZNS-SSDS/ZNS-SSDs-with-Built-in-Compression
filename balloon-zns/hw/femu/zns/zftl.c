@@ -84,15 +84,6 @@ static void zns_advance_write_pointer_bz(struct zns_ssd *zns)
     }
 }
 
-// added by znbc, get profiling window id by start lba
-static inline uint32_t zns_get_pfwd_id_by_slba(FemuCtrl *n, uint64_t slba)
-{
-
-    uint32_t zone_idx = (n->zone_size_log2 > 0 ? slba >> n->zone_size_log2 : slba / n->zone_size);
-    uint64_t zslba = (zone_idx) * n->zone_size;
-    return (slba - zslba) / (n->zone_size / ZONE_SIZE_TO_PROFILING_WINDOW_SIZE_RATIO);
-}
-
 #endif
 
 static uint64_t zns_advance_status(struct zns_ssd *zns, struct ppa *ppa,struct nand_cmd *ncmd)
