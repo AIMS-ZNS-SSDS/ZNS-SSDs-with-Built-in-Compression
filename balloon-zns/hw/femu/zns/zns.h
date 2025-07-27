@@ -146,7 +146,7 @@ struct zns_write_cache{
     uint64_t used; 
     uint64_t cap;
     uint64_t* lpns; //identify the cached data
-    #ifdef USE_SLOT
+    #ifdef CR_ADAPT_WC
     uint64_t used_size;
     uint64_t cap_size;
     #endif
@@ -209,6 +209,11 @@ struct zns_ssd {
     uint64_t now_exssblk; // the extra-superblock in use. Enumerate from back to front!(eg. 63,62,...)
     #endif
 
+    #endif
+
+    #ifdef TEST_COMP_EFFECT
+    uint64_t tot_ppa_size;
+    uint64_t tot_comp_size;
     #endif
 
     SSDNandFlashTiming timing; /*Misao: accurate  timing emulation for zns ssd.*/

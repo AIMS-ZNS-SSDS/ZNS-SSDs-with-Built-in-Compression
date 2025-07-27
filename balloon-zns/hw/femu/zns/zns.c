@@ -116,6 +116,9 @@ static void zns_zone_additional_clear_bz(FemuCtrl *n){
     NvmeZone *zone;
     zone = n->zone_array;
     struct zns_ssd *zns = n->zns;
+    #ifdef TEST_COMP_EFFECT
+    zns->tot_ppa_size = zns->tot_comp_size = 0;
+    #endif
     int i;
     for (i = 0; i < n->num_zones; i++, zone++) {
         #ifdef USE_SUBSUPERBLOCK
@@ -171,6 +174,9 @@ static void zns_zone_additional_clear_bz(FemuCtrl *n){
     {
         zns->cache.write_cache[i].sblk = i;
         zns->cache.write_cache[i].used = 0;
+        #ifdef CR_ADAPT_WC
+        zns->cache.write_cache[i].used_size = 0;
+        #endif
     }
 }
 #endif
@@ -994,7 +1000,7 @@ static uint16_t zns_map_dptr(FemuCtrl *n, size_t len, NvmeRequest *req)
 #ifdef USE_SLOT
 // added by znbc, get profiling window id by start lba
 #if !defined(IncPFWD_NoRes)
-static inline uint32_t zns_get_pfwd_id_by_slba(NvmeNamespace *ns, uint64_t slba)
+static inline uint32_t zns_get_pfwd_id_by_slba(NvmeNamespace *ns, uint64_t slba, bool write)
 {
     FemuCtrl *n = ns->ctrl;
     uint32_t zone_idx = zns_zone_idx(ns, slba);
@@ -1176,8 +1182,9 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
         for(int i = 0; i < nsg; i++){
             comp_tot_size += req->compressed_size[i];
         }
-        
+
         #ifdef IncPFWD_NoRes
+        zone->pfwd[pfwd_id].len += comp_tot_size;
         int max_comp_size = 0;
         for(int j = 0; j < nsg; j++){
             if(req->compressed_size[j] > max_comp_size)
@@ -1192,13 +1199,15 @@ static uint16_t zns_nvme_rw(FemuCtrl *n, NvmeNamespace *ns, NvmeCmd *cmd,
             pfwd->slot_size_bs = UPPER(max_comp_size, SLOT_SIZE_BASE);
             zone->last_pfwd = pfwd_id;
             zone->pfwd_cnt++;
-            femu_debug("[znbc] IncPFWD_NoRes zns.c::zns_nvme_rw : zone->pfwd[%u].slot_size_bs = %u\n", pfwd_id, zone->pfwd[pfwd_id].slot_size_bs);
+            femu_debug("[znbc] IncPFWD_NoRes zns.c::zns_nvme_rw : zone->pfwd[%u].slot_size_bs = %u\n",\
+            pfwd_id, zone->pfwd[pfwd_id].slot_size_bs);
         }
         #endif
 
-        zone->pfwd[pfwd_id].len += comp_tot_size;
+        
 
         #ifdef COMP_ADAPTIVE_SLOTTING
+        zone->pfwd[pfwd_id].len += len * nsg;
         // added by znbc, update the profiling window
         for(int j = 0; j < nsg; j++){
             zone->pfwd[pfwd_id].percentile_cnt[req->compressed_size[j] * 100 / len] ++;
@@ -1725,8 +1734,8 @@ static void zns_init_params(FemuCtrl *n)
     id_zns->num_lun = n->zns_params.zns_num_lun;
     id_zns->num_plane = n->zns_params.zns_num_plane;
     id_zns->num_blk = n->zns_params.zns_num_blk; // nums of blks per plane
-    #ifdef NUM_PAGE_256
-    id_zns->num_page = 256;
+    #ifdef NUM_PAGE_FIXED
+    id_zns->num_page = 1024;
     #else
     id_zns->num_page = n->ns_size/ZNS_PAGE_SIZE/(id_zns->num_ch*id_zns->num_lun*id_zns->num_blk);
     #endif
@@ -1770,7 +1779,9 @@ static void zns_init_params(FemuCtrl *n)
     * ZNS_PAGE_SIZE / ZONE_SIZE_TO_PROFILING_WINDOW_SIZE_RATIO;
     #endif
 
-
+    #ifdef TEST_COMP_EFFECT
+    id_zns->tot_ppa_size = id_zns->tot_comp_size = 0;
+    #endif
     
     //Misao: init mapping table
     id_zns->l2p_sz = n->ns_size/LOGICAL_PAGE_SIZE;
@@ -1797,7 +1808,7 @@ static void zns_init_params(FemuCtrl *n)
         id_zns->cache.write_cache[i].sblk = i;
         id_zns->cache.write_cache[i].used = 0;
         id_zns->cache.write_cache[i].cap = (id_zns->stripe_uint/LOGICAL_PAGE_SIZE);
-        #ifdef USE_SLOT
+        #ifdef CR_ADAPT_WC
         id_zns->cache.write_cache[i].cap *= WRITE_CACHE_EXPANSION_RATIO;
         id_zns->cache.write_cache[i].cap_size = id_zns->stripe_uint;
         id_zns->cache.write_cache[i].used_size = 0;
@@ -1865,10 +1876,10 @@ static void zns_init_params(FemuCtrl *n)
     femu_log("| Consider QAT_LATENCY: \e[1;31m NO \e[0m\n"); 
     #endif
 
-    #ifdef NUM_PAGE_256
-    femu_log("| Make the num of pages certain(256), so that we can increase SSD_SIZE_MB to increase num_zones(for rocksdb, which need 32 zones): \e[1;32m YES \e[0m \n"); 
+    #ifdef NUM_PAGE_FIXED
+    femu_log("| Make the num of pages certain, so that we can increase SSD_SIZE_MB to increase num_zones(for rocksdb, which need 32 zones): \e[1;32m YES \e[0m \n"); 
     #else
-    femu_log("| Make the num of pages certain(256), so that we can increase SSD_SIZE_MB to increase num_zones(for rocksdb, which need 32 zones): \e[1;31m NO \e[0m\n"); 
+    femu_log("| Make the num of pages certain, so that we can increase SSD_SIZE_MB to increase num_zones(for rocksdb, which need 32 zones): \e[1;31m NO \e[0m\n"); 
     #endif
 
     #ifdef DIFFERENT_SG_LEN

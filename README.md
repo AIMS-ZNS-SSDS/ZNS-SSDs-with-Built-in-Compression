@@ -18,6 +18,12 @@ zns文件夹下的mode-selection.h中，COMPQAT和NO_FUNC是用于开启压缩功能的宏，FEMU_DE
 
 会依赖服务器中wpy师姐的代码。 在实验室服务器外要使用时这里必须改动。 详细不在此记录, 请询问wpy师姐.
 
+## IncSlotZNS
+
+是目前此代码的最终版本，提出了一种新的分析窗口设计方法，已作为本科毕设内容。目前暂时不再继续研究（2025/7/27）。
+大体思路可参考我主页的说明：<https://bystreamzhang.github.io/2025/02/28/balloon-zns-you-hua-ji-lu/>
+
+
 ## fio
 
 fio官方github：[axboe/fio: Flexible I/O Tester](https://github.com/axboe/fio)
@@ -98,3 +104,4 @@ rw=write
 我使用YCSB-cpp进行测试，对代码进行了一定修改
 
 仓库：https://github.com/bystreamzhang/YCSB-cpp-modification
+

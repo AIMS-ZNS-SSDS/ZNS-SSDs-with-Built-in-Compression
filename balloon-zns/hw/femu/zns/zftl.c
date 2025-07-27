@@ -377,6 +377,10 @@ static uint64_t zns_wc_flush(struct zns_ssd* zns, int wcidx, int type,uint64_t s
     #endif
     i = 0;
     femu_debug("[znbc] zftl.c::zns_wc_flush wcidx=%d used=%lu stime=%lu\n", wcidx, zns->cache.write_cache[wcidx].used, stime);
+    #ifdef TEST_COMP_EFFECT
+    zns->tot_ppa_size += zns->cache.write_cache[wcidx].used * LOGICAL_PAGE_SIZE;
+    #endif
+
     while(i < zns->cache.write_cache[wcidx].used)
     {
         for(p = 0;p<zns->num_plane;p++){
@@ -501,6 +505,9 @@ static uint64_t zns_wc_flush(struct zns_ssd* zns, int wcidx, int type,uint64_t s
                 /* get latency statistics */
                 sublat = zns_advance_status(zns, &ppa, &swr);
                 maxlat = (sublat > maxlat) ? sublat : maxlat;
+                #ifdef TEST_COMP_EFFECT
+                zns->tot_comp_size += ZNS_PAGE_SIZE * flash_type;
+                #endif
             }
         }
         /* need to advance the write pointer here */
@@ -511,12 +518,17 @@ static uint64_t zns_wc_flush(struct zns_ssd* zns, int wcidx, int type,uint64_t s
         #endif
     }
     zns->cache.write_cache[wcidx].used = 0;
+    #ifdef CR_ADAPT_WC
     zns->cache.write_cache[wcidx].used_size = 0;
+    #endif
     #ifdef SHOW_FLUSH_MAXLAT
     flush_cnt++;
     tot_maxlat += maxlat;
     avg_maxlat = tot_maxlat / flush_cnt;
     printf("[znbc] zftl.c::zns_wc_flush : maxlat = %lu flush_cnt=%lu tot_maxlat=%lu avg_maxlat=%lu get_page_cnt=%lu\n",maxlat, flush_cnt, tot_maxlat, avg_maxlat, get_page_cnt);
+    #endif
+    #ifdef TEST_COMP_EFFECT
+    printf("[znbc] zftl.c::zns_wc_flush : tot_ppa_size = %lu tot_comp_size = %lu percentile=%f \n",zns->tot_ppa_size, zns->tot_comp_size, (double)zns->tot_comp_size/zns->tot_ppa_size);
     #endif
     return maxlat;
 }
@@ -559,16 +571,24 @@ static uint64_t zns_write(struct zns_ssd *zns, NvmeRequest *req, FemuCtrl *n)
     }
 
     for (lpn = start_lpn; lpn <= end_lpn; lpn++) {
-        if(zns->cache.write_cache[wcidx].used==zns->cache.write_cache[wcidx].cap || zns->cache.write_cache[wcidx].used_size > zns->cache.write_cache[wcidx].cap_size - LOGICAL_PAGE_SIZE)
+        #ifdef CR_ADAPT_WC
+        if(zns->cache.write_cache[wcidx].used==zns->cache.write_cache[wcidx].cap || \
+            zns->cache.write_cache[wcidx].used_size > zns->cache.write_cache[wcidx].cap_size - LOGICAL_PAGE_SIZE)
+        #else
+        if(zns->cache.write_cache[wcidx].used==zns->cache.write_cache[wcidx].cap)
+        #endif
         {
-            femu_log("[W] flush wc %d (%u/%u)\n",wcidx,(int)zns->cache.write_cache[wcidx].used,(int)zns->cache.write_cache[wcidx].cap);
+            femu_log("[W] flush wc %d (%u/%u)\n",wcidx,(int)zns->cache.write_cache[wcidx].used,\
+            (int)zns->cache.write_cache[wcidx].cap);
             sublat = zns_wc_flush(zns,wcidx,USER_IO,req->stime,n);
             femu_log("[W] flush lat: %u\n", (int)sublat);
             maxlat = (sublat > maxlat) ? sublat : maxlat;
             sublat = 0;
         }
         zns->cache.write_cache[wcidx].lpns[zns->cache.write_cache[wcidx].used++]=lpn;
+        #ifdef CR_ADAPT_WC
         zns->cache.write_cache[wcidx].used_size += zns->slots[lpn].slot_size_bs;
+        #endif
         sublat += SRAM_WRITE_LATENCY_NS; //Simplified timing emulation
         maxlat = (sublat > maxlat) ? sublat : maxlat;
         // femu_log("[W] lpn:\t%lu\t-->wc cache:%u, used:%u\n",lpn,(int)wcidx,(int)zns->cache.write_cache[wcidx].used);

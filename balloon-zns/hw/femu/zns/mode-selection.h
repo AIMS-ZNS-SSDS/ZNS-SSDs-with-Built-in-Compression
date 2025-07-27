@@ -1,19 +1,26 @@
 /* 
     some options for balloon-zns
     if want to use origin femu, need to disable COMPQAT and BALLOON_ZNS
-    to test rocksdb, need to enable NUM_PAGE_256 and change SSD_SIZE_MB  in run-zns.sh to increase num_zones to 32
+    to test rocksdb, need to enable NUM_PAGE_FIXED and change SSD_SIZE_MB  in run-zns.sh to increase num_zones to 32
 */
 
 /* ============= Core Options =============*/
 #define COMPQAT // just enable qat and do compress, should enable BALLOON_ZNS to have real effects
+
 #define BALLOON_ZNS // need to enable COMPQAT and NO_FUNC first
-#define IncPFWD_NoRes
 #ifdef BALLOON_ZNS
     #define USE_SLOT
+    #ifdef USE_SLOT
+        #define IncPFWD_NoRes // IncSlotZNS
+        #define CR_ADAPT_WC // important change in write cache for compress.
+        #ifdef IncPFWD_NoRes
+        #endif
+        #define TEST_COMP_EFFECT
+    #endif
     #if !defined(IncPFWD_NoRes)
         #define USE_SUBSUPERBLOCK // an idea in Balloon-ZNS
         #define COMP_ADAPTIVE_SLOTTING // an idea in Balloon-ZNS
-        #endif
+    #endif
 #endif
 
 #if defined(USE_SLOT) && !defined(IncPFWD_NoRes)
@@ -53,7 +60,7 @@
     #define WRITE_CACHE_EXPANSION_RATIO 5
 #endif
 
-#define NUM_PAGE_256 // for rocksdb !!! To make the num of pages per block certain(256), so that we can increase SSD_SIZE_MB to increase num_zones. Also need to change run-zns.sh
+#define NUM_PAGE_FIXED // for rocksdb !!! To make the num of pages per block certain, so that we can increase SSD_SIZE_MB to increase num_zones. Also need to change run-zns.sh
 
 //#define MAX_ACTIVE_ZONES 16
 //#define MAX_OPEN_ZONES 16
